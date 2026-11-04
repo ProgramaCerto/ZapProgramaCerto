@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UserPlus, MoreVertical, Search, Mic, Image as ImageIcon, Settings, LogOut, Radio, User as UserIcon } from 'lucide-react';
+import { UserPlus, MoreVertical, Search, Mic, Image as ImageIcon, Settings, LogOut, Radio, User as UserIcon, Bell, BellRing } from 'lucide-react';
 import { Chat, User } from '../../types/chat';
+import { getNotificationPermissionStatus, requestNotificationPermission } from '../../utils/notifications';
 
 interface ChatListProps {
   currentUser: User;
@@ -25,7 +26,15 @@ export const ChatList: React.FC<ChatListProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(
+    typeof window !== 'undefined' ? getNotificationPermissionStatus() : 'unsupported'
+  );
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const handleRequestNotification = async () => {
+    const perm = await requestNotificationPermission();
+    setNotificationStatus(perm);
+  };
 
   // Close menu on click outside
   useEffect(() => {
@@ -176,6 +185,32 @@ export const ChatList: React.FC<ChatListProps> = ({
           />
         </div>
       </div>
+
+      {/* Native Chrome Notifications Banner (if permission not yet decided) */}
+      {notificationStatus === 'default' && (
+        <div className="mx-3 my-2 p-2.5 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between gap-2.5 animate-in fade-in duration-200">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <BellRing className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-blue-900 leading-tight truncate">
+                Notificações de mensagens
+              </p>
+              <p className="text-[11px] text-blue-700 leading-tight mt-0.5 truncate">
+                Receba alertas no celular quando responderem
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRequestNotification}
+            className="shrink-0 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-xs rounded-lg shadow-xs transition cursor-pointer"
+          >
+            Permitir
+          </button>
+        </div>
+      )}
 
       {/* Chat List */}
       <div className="flex-1 overflow-y-auto divide-y divide-slate-100/80">

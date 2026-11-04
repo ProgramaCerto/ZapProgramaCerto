@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { MessageSquare, Eye, EyeOff, Lock, AtSign, User, ArrowLeft, CheckCircle2, AlertCircle, Camera, Upload } from 'lucide-react';
 import { storage } from '../../services/storage';
+import { requestNotificationPermission } from '../../utils/notifications';
 
 interface RegisterProps {
   onGoToLogin: (prefilledHandle?: string) => void;
@@ -39,6 +40,7 @@ export const Register: React.FC<RegisterProps> = ({ onGoToLogin }) => {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    requestNotificationPermission().catch(() => {});
     setError(null);
 
     if (!name.trim()) {

@@ -1,7 +1,8 @@
 import React, { useState, useRef } from 'react';
-import { ArrowLeft, User, Key, Eye, EyeOff, LogOut, CheckCircle2, AlertCircle, Database, ShieldCheck, Camera, Trash2, Upload } from 'lucide-react';
+import { ArrowLeft, User, Key, Eye, EyeOff, LogOut, CheckCircle2, AlertCircle, Database, ShieldCheck, Camera, Trash2, Upload, Bell, BellRing } from 'lucide-react';
 import { storage } from '../../services/storage';
 import { User as UserType } from '../../types/chat';
+import { getNotificationPermissionStatus, requestNotificationPermission, notifyNewMessage } from '../../utils/notifications';
 
 interface SettingsPanelProps {
   currentUser: UserType;
@@ -16,7 +17,25 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   onUpdateUser,
   onLogout,
 }) => {
-  const [activeSection, setActiveSection] = useState<'profile' | 'security'>('profile');
+  const [activeSection, setActiveSection] = useState<'profile' | 'security' | 'notifications'>('profile');
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(
+    typeof window !== 'undefined' ? getNotificationPermissionStatus() : 'unsupported'
+  );
+  const [testNotificationSent, setTestNotificationSent] = useState(false);
+
+  const handleRequestPermission = async () => {
+    const perm = await requestNotificationPermission();
+    setNotificationStatus(perm);
+  };
+
+  const handleTestNotification = () => {
+    notifyNewMessage({
+      senderName: 'ZapProgramaCerto',
+      text: '🔔 Teste de notificação: seu aparelho está pronto para receber alertas!',
+    });
+    setTestNotificationSent(true);
+    setTimeout(() => setTestNotificationSent(false), 3000);
+  };
 
   // Profile
   const [name, setName] = useState(currentUser.name);
@@ -158,6 +177,18 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
         >
           <Key className="w-4 h-4" />
           <span>Mudar Senha</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSection('notifications')}
+          className={`py-3 px-3 text-xs font-bold border-b-2 transition cursor-pointer flex items-center gap-1.5 ${
+            activeSection === 'notifications'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-slate-500 hover:text-slate-900'
+          }`}
+        >
+          <Bell className="w-4 h-4" />
+          <span>Notificações</span>
         </button>
       </div>
 
@@ -355,6 +386,77 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 <span>Salvar Nova Senha</span>
               </button>
             </form>
+          </div>
+        )}
+
+        {activeSection === 'notifications' && (
+          <div className="space-y-4 animate-in fade-in duration-150">
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-3">
+              <div className="flex items-center gap-2.5">
+                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white ${
+                  notificationStatus === 'granted' ? 'bg-emerald-600' : notificationStatus === 'denied' ? 'bg-rose-600' : 'bg-blue-600'
+                }`}>
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900">Notificações no Celular e Computador</h3>
+                  <p className="text-[11px] text-slate-500">
+                    Status no Google Chrome:{' '}
+                    <span className="font-semibold text-slate-800">
+                      {notificationStatus === 'granted'
+                        ? '✅ Autorizado / Ativo'
+                        : notificationStatus === 'denied'
+                        ? '❌ Bloqueado no Navegador'
+                        : '⚠️ Pendente de Autorização'}
+                    </span>
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                As notificações são emitidas diretamente pelo Google Chrome quando uma nova mensagem chegar para você, mesmo com a tela minimizada ou em segundo plano no celular.
+              </p>
+
+              {notificationStatus !== 'granted' ? (
+                <button
+                  type="button"
+                  onClick={handleRequestPermission}
+                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-xs rounded-xl transition shadow-xs cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <BellRing className="w-4 h-4" />
+                  <span>Pedir Autorização no Chrome</span>
+                </button>
+              ) : (
+                <div className="space-y-2">
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg flex items-center gap-2 text-xs text-emerald-800">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span>Seu aparelho está autorizado para receber notificações instantâneas!</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleTestNotification}
+                    className="w-full py-2 px-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-xs rounded-lg transition cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Bell className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Testar Notificação Agora</span>
+                  </button>
+
+                  {testNotificationSent && (
+                    <p className="text-[11px] text-emerald-600 font-medium text-center animate-in fade-in duration-100">
+                      Notificação de teste disparada!
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="p-3 bg-slate-100/70 rounded-xl text-[11px] text-slate-500 leading-relaxed space-y-1">
+              <p className="font-semibold text-slate-700">Dica sobre permissões do Chrome:</p>
+              <p>
+                Se você bloquear acidentalmente, você pode reativar tocando no ícone de cadeado ou configurações do site na barra de endereços do Chrome.
+              </p>
+            </div>
           </div>
         )}
 

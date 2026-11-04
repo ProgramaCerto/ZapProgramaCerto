@@ -9,6 +9,7 @@ import { ChatArea } from './components/Chat/ChatArea';
 import { NewContactPanel } from './components/Sidebar/NewContactPanel';
 import { SettingsPanel } from './components/Sidebar/SettingsPanel';
 import { ContactInfoModal } from './components/Modals/ContactInfoModal';
+import { requestNotificationPermission, initServiceWorker } from './utils/notifications';
 
 type SidebarView = 'chats' | 'settings' | 'new-contact';
 
@@ -27,8 +28,11 @@ export default function App() {
   // Contact Info modal (only when clicking contact name inside chat header)
   const [inspectingContact, setInspectingContact] = useState<User | null>(null);
 
-  // Load authenticated user on mount
+  // Load authenticated user on mount and request native Chrome notifications permission
   useEffect(() => {
+    initServiceWorker().catch(() => {});
+    requestNotificationPermission().catch(() => {});
+
     const user = storage.getCurrentUser();
     if (user) {
       setCurrentUser(user);
@@ -57,6 +61,7 @@ export default function App() {
 
   // Auth Handlers
   const handleLoginSuccess = (user: User) => {
+    requestNotificationPermission().catch(() => {});
     setCurrentUser(user);
     const userChats = storage.getUserChats(user.id);
     setChats(userChats);

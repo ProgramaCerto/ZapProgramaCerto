@@ -2,6 +2,7 @@ import { User, Chat, Message } from '../types/chat';
 import { soundEffects } from '../utils/audio';
 import { getSupabaseClient } from './supabase';
 import { uploadPhotoToSupabase } from './storageUpload';
+import { notifyNewMessage } from '../utils/notifications';
 
 const STORAGE_KEYS = {
   USERS: 'zapprogramacerto_users_db',
@@ -150,6 +151,22 @@ class StorageService {
         messages.push(mappedMsg);
         if (currentUser && mappedMsg.recipientId === currentUser.id) {
           soundEffects.playReceiveSound();
+
+          // Dispara notificação nativa do Chrome
+          const sender = this.getUsers().find((u) => u.id === mappedMsg.senderId);
+          const savedRel = this.getSavedContacts().find(
+            (sc) => sc.usuario_id === currentUser.id && sc.contato_id === mappedMsg.senderId
+          );
+          const senderName = savedRel?.nome_salvo || sender?.name || sender?.handle || 'ZapProgramaCerto';
+          notifyNewMessage({
+            senderName,
+            senderHandle: sender?.handle,
+            text: mappedMsg.text,
+            type: mappedMsg.type,
+            chatId: mappedMsg.chatId,
+            avatarUrl: sender?.avatar,
+          });
+
           // Update status to delivered in Supabase
           if (row.status !== 'lida') {
             const client = getSupabaseClient();
@@ -238,6 +255,21 @@ class StorageService {
 
             if (rm.destinatario_id === currentUser.id) {
               soundEffects.playReceiveSound();
+
+              // Dispara notificação nativa do Chrome
+              const sender = this.getUsers().find((u) => u.id === rm.remetente_id);
+              const savedRel = this.getSavedContacts().find(
+                (sc) => sc.usuario_id === currentUser.id && sc.contato_id === rm.remetente_id
+              );
+              const senderName = savedRel?.nome_salvo || sender?.name || sender?.handle || 'ZapProgramaCerto';
+              notifyNewMessage({
+                senderName,
+                senderHandle: sender?.handle,
+                text: rm.texto || '',
+                type: rm.tipo || (rm.fotos_anexadas ? 'image' : rm.audio_url ? 'audio' : 'text'),
+                chatId: getConversationId(rm.remetente_id, rm.destinatario_id),
+                avatarUrl: sender?.avatar,
+              });
             }
           } else if (localMessages[idx].status !== mappedStatus) {
             localMessages[idx].status = mappedStatus;

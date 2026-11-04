@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { MessageSquare, Eye, EyeOff, Lock, AtSign, ArrowRight, UserCheck, AlertCircle } from 'lucide-react';
 import { storage } from '../../services/storage';
 import { User } from '../../types/chat';
+import { requestNotificationPermission } from '../../utils/notifications';
 
 interface LoginProps {
   onLoginSuccess: (user: User) => void;
@@ -34,6 +35,7 @@ export const Login: React.FC<LoginProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    requestNotificationPermission().catch(() => {});
     setError(null);
     setNotice(null);
 
