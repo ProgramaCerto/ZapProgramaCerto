@@ -33,16 +33,6 @@ const INITIAL_USERS: User[] = [
     online: true,
     createdAt: '2026-02-01T09:15:00Z',
   },
-  {
-    id: 'user_suporte',
-    name: 'Suporte ZapProgramaCerto',
-    handle: '@suporte',
-    password: '123',
-    avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-    bio: 'Canal oficial de ajuda do ZapProgramaCerto 💬',
-    online: true,
-    createdAt: '2026-01-01T00:00:00Z',
-  },
 ];
 
 const STORAGE_KEYS = {
@@ -71,10 +61,33 @@ class StorageService {
     const existingUsers = localStorage.getItem(STORAGE_KEYS.USERS);
     if (!existingUsers) {
       localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(INITIAL_USERS));
+    } else {
+      // Remove any previously stored @suporte user as requested
+      try {
+        const parsed = JSON.parse(existingUsers) as User[];
+        const filtered = parsed.filter((u) => u.handle !== '@suporte' && u.id !== 'user_suporte');
+        if (filtered.length !== parsed.length) {
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(filtered));
+        }
+      } catch {
+        // Safe
+      }
     }
+
     const existingChats = localStorage.getItem(STORAGE_KEYS.CHATS);
     if (!existingChats) {
       localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify([]));
+    } else {
+      // Remove any chats with @suporte
+      try {
+        const parsedChats = JSON.parse(existingChats) as Chat[];
+        const filteredChats = parsedChats.filter((c) => !c.participants.includes('user_suporte') && c.contact?.handle !== '@suporte');
+        if (filteredChats.length !== parsedChats.length) {
+          localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify(filteredChats));
+        }
+      } catch {
+        // Safe
+      }
     }
     const existingMessages = localStorage.getItem(STORAGE_KEYS.MESSAGES);
     if (!existingMessages) {
@@ -417,44 +430,9 @@ class StorageService {
     users.push(newUser);
     this.saveUsers(users);
 
-    this.createInitialChatWithSuporte(newUser);
     this.setPrefilledHandle(cleanHandle);
 
     return { success: true, user: newUser };
-  }
-
-  private createInitialChatWithSuporte(newUser: User) {
-    const suporteUser = this.getUsers().find((u) => u.handle === '@suporte') || INITIAL_USERS[3];
-    const chatId = `chat_${newUser.id}_${suporteUser.id}`;
-    
-    const chats = this.getStoredChats();
-    const welcomeMsg: Message = {
-      id: `msg_welcome_${Date.now()}`,
-      chatId,
-      senderId: suporteUser.id,
-      senderHandle: suporteUser.handle,
-      recipientId: newUser.id,
-      text: `Olá, ${newUser.name}! Bem-vindo(a) ao ZapProgramaCerto 💙. Aqui você envia mensagens de texto, fotos na hora e áudios com sincronização contínua. Fique à vontade para me mandar uma mensagem!`,
-      type: 'text',
-      timestamp: new Date().toISOString(),
-      status: 'read',
-    };
-
-    const newChat: Chat = {
-      id: chatId,
-      participants: [newUser.id, suporteUser.id],
-      contact: suporteUser,
-      lastMessage: welcomeMsg,
-      unreadCount: 1,
-      updatedAt: new Date().toISOString(),
-    };
-
-    chats.push(newChat);
-    this.saveChats(chats);
-
-    const messages = this.getStoredMessages();
-    messages.push(welcomeMsg);
-    this.saveMessages(messages);
   }
 
   public async login(rawHandle: string, password: string): Promise<{ success: boolean; message?: string; user?: User }> {
@@ -559,13 +537,14 @@ class StorageService {
     return { success: true, message: 'Senha alterada com sucesso!' };
   }
 
-  public updateProfile(userId: string, updates: { name?: string; bio?: string }): { success: boolean; user?: User } {
+  public updateProfile(userId: string, updates: { name?: string; bio?: string; avatar?: string }): { success: boolean; user?: User } {
     const users = this.getUsers();
     const index = users.findIndex((u) => u.id === userId);
     if (index === -1) return { success: false };
 
     if (updates.name) users[index].name = updates.name.trim();
     if (updates.bio !== undefined) users[index].bio = updates.bio.trim();
+    if (updates.avatar !== undefined) users[index].avatar = updates.avatar;
 
     this.saveUsers(users);
     const updated = users[index];
@@ -579,6 +558,7 @@ class StorageService {
           .update({
             nome: updated.name,
             bio: updated.bio,
+            avatar_url: updated.avatar,
           })
           .eq('id', userId)
       ).catch(() => {});

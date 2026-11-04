@@ -4,6 +4,7 @@ import {
   Send,
   Mic,
   Camera,
+  Image as ImageIcon,
   Trash2,
   X,
   Phone,
@@ -33,6 +34,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [inputText, setInputText] = useState('');
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   // Audio Recording State
   const [isRecording, setIsRecording] = useState(false);
@@ -132,6 +134,36 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 50);
+  };
+
+  // Gallery Photo Selected
+  const handleGalleryPhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result as string;
+      storage.sendMessage({
+        chatId: chat.id,
+        senderId: currentUser.id,
+        senderHandle: currentUser.handle,
+        recipientId: chat.contact.id,
+        type: 'image',
+        mediaUrl: base64,
+        photosAttached: base64,
+        text: '📷 Foto',
+      });
+
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    };
+    reader.readAsDataURL(file);
+
+    if (galleryInputRef.current) {
+      galleryInputRef.current.value = '';
+    }
   };
 
   // Start Audio Recording
@@ -476,9 +508,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           </div>
         ) : (
-          /* Standard Input Bar (No emoji icon, Camera for taking photo now!) */
+          /* Standard Input Bar (Camera for taking photo now + Gallery for picking from device!) */
           <form onSubmit={handleSendText} className="flex items-center gap-2">
-            {/* Ícone de tirar foto agora (substituindo emoji conforme solicitado) */}
+            {/* Hidden input for gallery image selection */}
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleGalleryPhotoSelect}
+              className="hidden"
+            />
+
+            {/* Ícone de tirar foto agora */}
             <button
               type="button"
               onClick={() => setIsCameraOpen(true)}
@@ -487,6 +528,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer shrink-0"
             >
               <Camera className="w-5 h-5" />
+            </button>
+
+            {/* Ícone de adicionar foto da galeria */}
+            <button
+              type="button"
+              onClick={() => galleryInputRef.current?.click()}
+              title="Adicionar foto da galeria"
+              aria-label="Adicionar foto da galeria"
+              className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer shrink-0"
+            >
+              <ImageIcon className="w-5 h-5" />
             </button>
 
             {/* Text input */}

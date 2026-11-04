@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ArrowLeft, User, Key, Eye, EyeOff, LogOut, CheckCircle2, AlertCircle, Database, ShieldCheck } from 'lucide-react';
+import React, { useState, useRef } from 'react';
+import { ArrowLeft, User, Key, Eye, EyeOff, LogOut, CheckCircle2, AlertCircle, Database, ShieldCheck, Camera, Trash2, Upload } from 'lucide-react';
 import { storage } from '../../services/storage';
 import { User as UserType } from '../../types/chat';
 
@@ -31,6 +31,40 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   const [showNewPass, setShowNewPass] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
+
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Handle Change Photo
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result as string;
+      const result = storage.updateProfile(currentUser.id, { avatar: base64 });
+      if (result.success && result.user) {
+        onUpdateUser(result.user);
+        setProfileSuccess('Foto de perfil atualizada!');
+        setTimeout(() => setProfileSuccess(null), 3000);
+      }
+    };
+    reader.readAsDataURL(file);
+
+    if (avatarInputRef.current) {
+      avatarInputRef.current.value = '';
+    }
+  };
+
+  // Handle Remove Photo
+  const handleRemovePhoto = () => {
+    const result = storage.updateProfile(currentUser.id, { avatar: '' });
+    if (result.success && result.user) {
+      onUpdateUser(result.user);
+      setProfileSuccess('Foto de perfil removida.');
+      setTimeout(() => setProfileSuccess(null), 3000);
+    }
+  };
 
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,6 +111,15 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-white select-none animate-in slide-in-from-left-4 duration-150">
+      {/* Hidden file input for changing profile photo */}
+      <input
+        ref={avatarInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handlePhotoUpload}
+        className="hidden"
+      />
+
       {/* WhatsApp Web style header with back arrow */}
       <div className="flex items-center gap-3 px-4 py-4 bg-blue-600 text-white shrink-0">
         <button
@@ -121,19 +164,45 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
         {activeSection === 'profile' && (
-          <div className="space-y-4">
-            {/* Profile Avatar Card */}
-            <div className="flex items-center gap-3.5 p-3.5 rounded-xl bg-blue-50/50 border border-blue-100">
-              <img
-                src={currentUser.avatar}
-                alt={currentUser.name}
-                className="w-14 h-14 rounded-full object-cover border-2 border-white shadow-xs shrink-0"
-                referrerPolicy="no-referrer"
-              />
-              <div className="min-w-0">
-                <h4 className="text-sm font-bold text-slate-900 truncate">{currentUser.name}</h4>
-                <p className="text-xs font-semibold text-blue-600">{currentUser.handle}</p>
-                <p className="text-[11px] text-slate-400 mt-0.5">Online no AzulChat</p>
+          <div className="space-y-5">
+            {/* Centered Profile Photo with Action Buttons */}
+            <div className="flex flex-col items-center justify-center pt-2 pb-4 text-center">
+              <div className="relative mb-3">
+                {currentUser.avatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={currentUser.name}
+                    className="w-28 h-28 rounded-full object-cover border-4 border-blue-50 shadow-md bg-white"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="w-28 h-28 rounded-full bg-slate-100 border-4 border-slate-50 shadow-md flex items-center justify-center text-slate-400">
+                    <User className="w-14 h-14" />
+                  </div>
+                )}
+              </div>
+
+              {/* Botões: Trocar foto de perfil ou Retirar foto de perfil */}
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  className="py-1.5 px-3.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-xs transition inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  <span>Trocar foto de perfil</span>
+                </button>
+
+                {currentUser.avatar && (
+                  <button
+                    type="button"
+                    onClick={handleRemovePhoto}
+                    className="py-1.5 px-3 bg-slate-100 hover:bg-rose-50 hover:text-rose-600 text-slate-600 text-xs font-semibold rounded-xl transition inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Retirar foto</span>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -144,7 +213,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleSaveProfile} className="space-y-3.5">
+            <form onSubmit={handleSaveProfile} className="space-y-3.5 pt-1">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
                   Seu Nome
@@ -159,7 +228,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
-                  Seu Arroba (@)
+                  Seu Arroba / Usuário (Fixo)
                 </label>
                 <input
                   type="text"
@@ -177,7 +246,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   value={bio}
                   onChange={(e) => setBio(e.target.value)}
                   rows={2}
-                  placeholder="Disponível no AzulChat..."
+                  placeholder="Disponível no ZapProgramaCerto..."
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition resize-none"
                 />
               </div>
@@ -186,7 +255,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                 type="submit"
                 className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-xl transition shadow-xs cursor-pointer"
               >
-                Salvar Dados do Perfil
+                Salvar Alterações
               </button>
             </form>
           </div>
@@ -197,7 +266,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <div>
               <h4 className="text-sm font-semibold text-slate-900">Mudar Senha</h4>
               <p className="text-xs text-slate-500 mt-0.5">
-                Altere a sua senha de acesso ao AzulChat
+                Altere a sua senha de acesso ao ZapProgramaCerto
               </p>
             </div>
 
@@ -296,11 +365,11 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
             <span>Banco de Dados Supabase</span>
           </div>
           <p className="text-[11px] text-slate-600 leading-relaxed">
-            As tabelas <code>usuarios</code>, <code>contatos</code> e <code>mensagens</code> com políticas <code>ALL</code> estão configuradas.
+            As tabelas <code>usuarios</code>, <code>contatos</code> e <code>mensagens</code> com políticas <code>ALL</code> estão sincronizadas.
           </p>
           <div className="pt-1 text-[11px] text-blue-700 font-semibold flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-blue-600" />
-            <span>Pronto para receber sua API Key e URL</span>
+            <span>Conectado em tempo real</span>
           </div>
         </div>
 

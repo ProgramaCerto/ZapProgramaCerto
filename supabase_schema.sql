@@ -101,6 +101,6 @@ INSERT INTO public.usuarios (nome, arroba, senha, avatar_url, bio, online)
 VALUES 
   ('Ana Clara', '@ana', '123', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', 'Designer UI/UX', true),
   ('Carlos Eduardo', '@carlos', '123', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', 'Desenvolvedor Full Stack', true),
-  ('Maria Silva', '@mariasilva', '123', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', 'Sempre conectada!', true),
-  ('Suporte ZapProgramaCerto', '@suporte', '123', 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150', 'Canal oficial de ajuda do ZapProgramaCerto', true)
+  ('Maria Silva', '@mariasilva', '123', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', 'Sempre conectada!', true)
 ON CONFLICT (arroba) DO NOTHING;
+
