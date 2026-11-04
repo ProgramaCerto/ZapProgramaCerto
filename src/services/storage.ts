@@ -1,6 +1,7 @@
 import { User, Chat, Message } from '../types/chat';
 import { soundEffects } from '../utils/audio';
 import { getSupabaseClient } from './supabase';
+import { uploadPhotoToSupabase } from './storageUpload';
 
 const STORAGE_KEYS = {
   USERS: 'zapprogramacerto_users_db',
@@ -943,6 +944,25 @@ class StorageService {
       ? getConversationId(params.senderId, resolvedRecipientId)
       : params.chatId;
 
+    let mediaUrlToStore = params.mediaUrl;
+    let photosAttachedToStore = params.photosAttached;
+
+    // Se for foto, envia para o Banco de Fotos (Supabase Storage) para ter URL pública permanente
+    if (params.type === 'image') {
+      const candidate = params.mediaUrl || params.photosAttached;
+      if (candidate && (candidate.startsWith('data:') || candidate.startsWith('blob:'))) {
+        try {
+          const publicUrl = await uploadPhotoToSupabase(candidate, params.senderId);
+          if (publicUrl) {
+            mediaUrlToStore = publicUrl;
+            photosAttachedToStore = publicUrl;
+          }
+        } catch (uploadErr) {
+          console.warn('Erro ao armazenar foto no banco de fotos (Supabase Storage):', uploadErr);
+        }
+      }
+    }
+
     const newMessage: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       chatId: stableChatId,
@@ -951,10 +971,10 @@ class StorageService {
       recipientId: resolvedRecipientId,
       type: params.type,
       text: params.text,
-      mediaUrl: params.mediaUrl,
+      mediaUrl: mediaUrlToStore,
       photosAttached:
-        params.photosAttached ||
-        (params.type === 'image' && params.mediaUrl ? params.mediaUrl : undefined),
+        photosAttachedToStore ||
+        (params.type === 'image' && mediaUrlToStore ? mediaUrlToStore : undefined),
       audioDuration: params.audioDuration,
       timestamp: new Date().toISOString(),
       status: 'sending',
@@ -984,6 +1004,10 @@ class StorageService {
           })
           .select()
           .maybeSingle();
+
+        if (error) {
+          console.error('Erro ao inserir mensagem no Supabase:', error);
+        }
 
         if (!error && data?.id) {
           newMessage.id = data.id;

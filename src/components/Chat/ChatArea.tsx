@@ -2,10 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft,
   Send,
-  Mic,
   Camera,
   Image as ImageIcon,
-  Trash2,
   X,
   Phone,
   Video,
@@ -13,13 +11,12 @@ import {
   UserPlus,
   Check,
   User,
+  Loader2,
 } from 'lucide-react';
 import { Chat, Message, User as UserType } from '../../types/chat';
 import { storage } from '../../services/storage';
-import { AudioMessagePlayer } from './AudioMessagePlayer';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { formatDuration, generateSyntheticAudioBlob } from '../../utils/audio';
-import { compressImage } from '../../utils/image';
+import { uploadPhotoToSupabase } from '../../services/storageUpload';
 
 interface ChatAreaProps {
   chat: Chat;
@@ -38,6 +35,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [inputText, setInputText] = useState('');
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
   // Unsaved Contact state
@@ -47,13 +45,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     chat.contact.name && chat.contact.name !== chat.contact.handle ? chat.contact.name : ''
   );
   const [isSaving, setIsSaving] = useState(false);
-
-  // Audio Recording State
-  const [isRecording, setIsRecording] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -86,10 +77,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
     return () => {
       unsubscribe();
-      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-        mediaRecorderRef.current.stop();
-      }
     };
   }, [chat.id]);
 
@@ -152,44 +139,19 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   // Live Camera Photo Captured
   const handleCameraPhotoCaptured = async (photoBase64: string) => {
-    let finalPhoto = photoBase64;
+    setIsUploadingPhoto(true);
     try {
-      finalPhoto = await compressImage(photoBase64, 1024, 1024, 0.72);
-    } catch {
-      // Use original if compression fails
-    }
+      // Envia a foto para o Banco de Fotos (Supabase Storage) para ter URL pública permanente
+      const permanentUrl = await uploadPhotoToSupabase(photoBase64, currentUser.id);
 
-    await storage.sendMessage({
-      chatId: chat.id,
-      senderId: currentUser.id,
-      senderHandle: currentUser.handle,
-      recipientId: chat.contact.id,
-      type: 'image',
-      mediaUrl: finalPhoto,
-      photosAttached: finalPhoto,
-      text: '📷 Foto',
-    });
-
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 50);
-  };
-
-  // Gallery Photo Selected
-  const handleGalleryPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const compressedBase64 = await compressImage(file, 1024, 1024, 0.72);
       await storage.sendMessage({
         chatId: chat.id,
         senderId: currentUser.id,
         senderHandle: currentUser.handle,
         recipientId: chat.contact.id,
         type: 'image',
-        mediaUrl: compressedBase64,
-        photosAttached: compressedBase64,
+        mediaUrl: permanentUrl,
+        photosAttached: permanentUrl,
         text: '📷 Foto',
       });
 
@@ -197,115 +159,44 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 50);
     } catch (err) {
-      console.error('Falha ao processar imagem da galeria', err);
+      console.error('Erro ao enviar foto da câmera:', err);
     } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  // Gallery Photo Selected
+  const handleGalleryPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploadingPhoto(true);
+    try {
+      // Envia a foto para o Banco de Fotos (Supabase Storage) para ter URL pública permanente
+      const permanentUrl = await uploadPhotoToSupabase(file, currentUser.id);
+
+      await storage.sendMessage({
+        chatId: chat.id,
+        senderId: currentUser.id,
+        senderHandle: currentUser.handle,
+        recipientId: chat.contact.id,
+        type: 'image',
+        mediaUrl: permanentUrl,
+        photosAttached: permanentUrl,
+        text: '📷 Foto',
+      });
+
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, 50);
+    } catch (err) {
+      console.error('Falha ao processar e enviar foto da galeria:', err);
+    } finally {
+      setIsUploadingPhoto(false);
       if (galleryInputRef.current) {
         galleryInputRef.current.value = '';
       }
     }
-  };
-
-  // Start Audio Recording
-  const startRecording = async () => {
-    audioChunksRef.current = [];
-    setRecordingSeconds(0);
-
-    try {
-      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const mediaRecorder = new MediaRecorder(stream);
-        mediaRecorderRef.current = mediaRecorder;
-
-        mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
-          }
-        };
-
-        mediaRecorder.onstop = () => {
-          stream.getTracks().forEach((track) => track.stop());
-        };
-
-        mediaRecorder.start();
-        setIsRecording(true);
-
-        recordingTimerRef.current = setInterval(() => {
-          setRecordingSeconds((prev) => prev + 1);
-        }, 1000);
-      } else {
-        startSimulatedRecording();
-      }
-    } catch {
-      startSimulatedRecording();
-    }
-  };
-
-  const startSimulatedRecording = () => {
-    setIsRecording(true);
-    recordingTimerRef.current = setInterval(() => {
-      setRecordingSeconds((prev) => prev + 1);
-    }, 1000);
-  };
-
-  // Cancel Audio Recording
-  const cancelRecording = () => {
-    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-    mediaRecorderRef.current = null;
-    audioChunksRef.current = [];
-    setIsRecording(false);
-    setRecordingSeconds(0);
-  };
-
-  // Send Audio Recording
-  const finishAndSendRecording = async () => {
-    if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
-    const finalDuration = Math.max(recordingSeconds, 1);
-
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const reader = new FileReader();
-        reader.onloadend = async () => {
-          const base64Audio = reader.result as string;
-          await storage.sendMessage({
-            chatId: chat.id,
-            senderId: currentUser.id,
-            senderHandle: currentUser.handle,
-            recipientId: chat.contact.id,
-            type: 'audio',
-            mediaUrl: base64Audio,
-            audioDuration: finalDuration,
-          });
-        };
-        reader.readAsDataURL(audioBlob);
-      };
-      mediaRecorderRef.current.stop();
-    } else {
-      const { blob } = await generateSyntheticAudioBlob(finalDuration);
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64Audio = reader.result as string;
-        await storage.sendMessage({
-          chatId: chat.id,
-          senderId: currentUser.id,
-          senderHandle: currentUser.handle,
-          recipientId: chat.contact.id,
-          type: 'audio',
-          mediaUrl: base64Audio,
-          audioDuration: finalDuration,
-        });
-      };
-      reader.readAsDataURL(blob);
-    }
-
-    setIsRecording(false);
-    setRecordingSeconds(0);
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, 50);
   };
 
   const formatMsgTime = (dateStr: string) => {
@@ -462,15 +353,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   </div>
                 )}
 
-                {/* 3. Audio Message (Voice Note) */}
-                {msg.type === 'audio' && msg.mediaUrl && (
-                  <AudioMessagePlayer
-                    mediaUrl={msg.mediaUrl}
-                    duration={msg.audioDuration}
-                    isOutgoing={isOutgoing}
-                    avatar={isOutgoing ? currentUser.avatar : chat.contact.avatar}
-                  />
-                )}
+
 
                 {/* Timestamp & Bolinha Status Indicator (Exactly as specified) */}
                 <div
@@ -511,110 +394,76 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input / Audio Recording Footer (White and Blue palette) */}
+      {/* Input Footer (White and Blue palette) */}
       <div className="p-3 sm:p-4 bg-white border-t border-slate-200 z-10 shrink-0">
-        {isRecording ? (
-          /* Audio Recording Active Bar */
-          <div className="flex items-center justify-between gap-3 bg-blue-50/70 border border-blue-200 rounded-2xl px-4 py-2.5 animate-in slide-in-from-bottom-2 duration-150">
-            <div className="flex items-center gap-2.5">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-bold text-slate-800">Gravando áudio</span>
-                <span className="text-xs font-mono font-bold text-blue-700 bg-white px-2 py-0.5 rounded-md border border-blue-100">
-                  {formatDuration(recordingSeconds)}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={cancelRecording}
-                title="Cancelar gravação"
-                className="p-2 text-rose-600 hover:bg-rose-100/70 rounded-xl transition cursor-pointer"
-              >
-                <Trash2 className="w-5 h-5" />
-              </button>
-
-              <button
-                type="button"
-                onClick={finishAndSendRecording}
-                className="py-1.5 px-4 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-              >
-                <Send className="w-4 h-4" />
-                <span>Enviar Áudio</span>
-              </button>
-            </div>
+        {/* Status de envio de foto para o Banco de Fotos */}
+        {isUploadingPhoto && (
+          <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-xl mb-2.5 animate-in fade-in duration-150">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-600 shrink-0" />
+            <span>Enviando foto para o banco de fotos do Supabase...</span>
           </div>
-        ) : (
-          /* Standard Input Bar (Camera for taking photo now + Gallery for picking from device!) */
-          <form onSubmit={handleSendText} className="flex items-center gap-2">
-            {/* Hidden input for gallery image selection */}
-            <input
-              ref={galleryInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleGalleryPhotoSelect}
-              className="hidden"
-            />
-
-            {/* Ícone de tirar foto agora */}
-            <button
-              type="button"
-              onClick={() => setIsCameraOpen(true)}
-              title="Tirar foto agora"
-              aria-label="Tirar foto agora"
-              className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer shrink-0"
-            >
-              <Camera className="w-5 h-5" />
-            </button>
-
-            {/* Ícone de adicionar foto da galeria */}
-            <button
-              type="button"
-              onClick={() => galleryInputRef.current?.click()}
-              title="Adicionar foto da galeria"
-              aria-label="Adicionar foto da galeria"
-              className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer shrink-0"
-            >
-              <ImageIcon className="w-5 h-5" />
-            </button>
-
-            {/* Text input */}
-            <div className="flex-1 relative">
-              <input
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                placeholder="Digite uma mensagem..."
-                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
-              />
-            </div>
-
-            {/* Send or Microphone button */}
-            {inputText.trim().length > 0 ? (
-              <button
-                type="submit"
-                title="Enviar mensagem"
-                className="p-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-xl shadow-xs transition-transform active:scale-95 cursor-pointer shrink-0"
-              >
-                <Send className="w-5 h-5" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={startRecording}
-                title="Gravar áudio"
-                className="p-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-xl shadow-xs transition-transform active:scale-95 cursor-pointer shrink-0 flex items-center justify-center"
-              >
-                <Mic className="w-5 h-5" />
-              </button>
-            )}
-          </form>
         )}
+
+        {/* Standard Input Bar (Camera + Gallery + Text) */}
+        <form onSubmit={handleSendText} className="flex items-center gap-2">
+          {/* Hidden input for gallery image selection */}
+          <input
+            ref={galleryInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleGalleryPhotoSelect}
+            className="hidden"
+          />
+
+          {/* Ícone de tirar foto agora */}
+          <button
+            type="button"
+            onClick={() => setIsCameraOpen(true)}
+            title="Tirar foto agora"
+            aria-label="Tirar foto agora"
+            disabled={isUploadingPhoto}
+            className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer shrink-0 disabled:opacity-50"
+          >
+            <Camera className="w-5 h-5" />
+          </button>
+
+          {/* Ícone de adicionar foto da galeria */}
+          <button
+            type="button"
+            onClick={() => galleryInputRef.current?.click()}
+            title="Adicionar foto da galeria"
+            aria-label="Adicionar foto da galeria"
+            disabled={isUploadingPhoto}
+            className="p-2.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition cursor-pointer shrink-0 disabled:opacity-50"
+          >
+            <ImageIcon className="w-5 h-5" />
+          </button>
+
+          {/* Text input */}
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              placeholder="Digite uma mensagem..."
+              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
+            />
+          </div>
+
+          {/* Send button */}
+          <button
+            type="submit"
+            disabled={!inputText.trim() || isUploadingPhoto}
+            title="Enviar mensagem"
+            className={`p-2.5 rounded-xl shadow-xs transition-transform active:scale-95 shrink-0 ${
+              inputText.trim().length > 0 && !isUploadingPhoto
+                ? 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white cursor-pointer'
+                : 'bg-slate-100 text-slate-300 cursor-not-allowed border border-slate-200'
+            }`}
+          >
+            <Send className="w-5 h-5" />
+          </button>
+        </form>
       </div>
 
       {/* Modal para Salvar Contato com Nome */}

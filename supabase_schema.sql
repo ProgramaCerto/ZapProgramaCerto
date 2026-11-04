@@ -96,11 +96,27 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.usuarios;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.contatos;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.mensagens;
 
--- 8. DADOS INICIAIS DE TESTE (OPCIONAL)
+-- 8. BANCO DE FOTOS NO SUPABASE STORAGE (BUCKET 'fotos')
+-- Criação do bucket 'fotos' com acesso público:
+INSERT INTO storage.buckets (id, name, public) 
+VALUES ('fotos', 'fotos', true) 
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+-- Políticas de acesso público para o banco de fotos:
+DROP POLICY IF EXISTS "Acesso publico total para fotos" ON storage.objects;
+CREATE POLICY "Acesso publico total para fotos" 
+ON storage.objects 
+FOR ALL 
+TO public 
+USING (bucket_id = 'fotos') 
+WITH CHECK (bucket_id = 'fotos');
+
+-- 9. DADOS INICIAIS DE TESTE (OPCIONAL)
 INSERT INTO public.usuarios (nome, arroba, senha, avatar_url, bio, online)
 VALUES 
   ('Ana Clara', '@ana', '123', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150', 'Designer UI/UX', true),
   ('Carlos Eduardo', '@carlos', '123', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150', 'Desenvolvedor Full Stack', true),
   ('Maria Silva', '@mariasilva', '123', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150', 'Sempre conectada!', true)
 ON CONFLICT (arroba) DO NOTHING;
+
 
