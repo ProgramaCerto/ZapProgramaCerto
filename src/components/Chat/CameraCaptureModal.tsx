@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Camera, X, RotateCcw, Send, RefreshCw, AlertCircle } from 'lucide-react';
+import { compressImage } from '../../utils/image';
 
 interface CameraCaptureModalProps {
   isOpen: boolean;
@@ -72,14 +73,27 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     if (!videoRef.current) return;
     const video = videoRef.current;
 
+    const maxDim = 1024;
+    let w = video.videoWidth || 640;
+    let h = video.videoHeight || 480;
+    if (w > maxDim || h > maxDim) {
+      if (w > h) {
+        h = Math.round((h * maxDim) / w);
+        w = maxDim;
+      } else {
+        w = Math.round((w * maxDim) / h);
+        h = maxDim;
+      }
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = w;
+    canvas.height = h;
 
     const ctx = canvas.getContext('2d');
     if (ctx) {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const photoData = canvas.toDataURL('image/jpeg', 0.85);
+      ctx.drawImage(video, 0, 0, w, h);
+      const photoData = canvas.toDataURL('image/jpeg', 0.72);
       setCapturedPhoto(photoData);
       stopCamera();
     }
@@ -97,15 +111,20 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     }
   };
 
-  const handleNativeCameraFallback = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleNativeCameraFallback = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setCapturedPhoto(reader.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const compressed = await compressImage(file, 1024, 1024, 0.72);
+      setCapturedPhoto(compressed);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setCapturedPhoto(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   if (!isOpen) return null;

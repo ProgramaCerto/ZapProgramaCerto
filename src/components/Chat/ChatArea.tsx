@@ -19,6 +19,7 @@ import { storage } from '../../services/storage';
 import { AudioMessagePlayer } from './AudioMessagePlayer';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { formatDuration, generateSyntheticAudioBlob } from '../../utils/audio';
+import { compressImage } from '../../utils/image';
 
 interface ChatAreaProps {
   chat: Chat;
@@ -151,14 +152,21 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   // Live Camera Photo Captured
   const handleCameraPhotoCaptured = async (photoBase64: string) => {
+    let finalPhoto = photoBase64;
+    try {
+      finalPhoto = await compressImage(photoBase64, 1024, 1024, 0.72);
+    } catch {
+      // Use original if compression fails
+    }
+
     await storage.sendMessage({
       chatId: chat.id,
       senderId: currentUser.id,
       senderHandle: currentUser.handle,
       recipientId: chat.contact.id,
       type: 'image',
-      mediaUrl: photoBase64,
-      photosAttached: photoBase64,
+      mediaUrl: finalPhoto,
+      photosAttached: finalPhoto,
       text: '📷 Foto',
     });
 
@@ -168,32 +176,32 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   // Gallery Photo Selected
-  const handleGalleryPhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleGalleryPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result as string;
+    try {
+      const compressedBase64 = await compressImage(file, 1024, 1024, 0.72);
       await storage.sendMessage({
         chatId: chat.id,
         senderId: currentUser.id,
         senderHandle: currentUser.handle,
         recipientId: chat.contact.id,
         type: 'image',
-        mediaUrl: base64,
-        photosAttached: base64,
+        mediaUrl: compressedBase64,
+        photosAttached: compressedBase64,
         text: '📷 Foto',
       });
 
       setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 50);
-    };
-    reader.readAsDataURL(file);
-
-    if (galleryInputRef.current) {
-      galleryInputRef.current.value = '';
+    } catch (err) {
+      console.error('Falha ao processar imagem da galeria', err);
+    } finally {
+      if (galleryInputRef.current) {
+        galleryInputRef.current.value = '';
+      }
     }
   };
 
@@ -435,14 +443,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                 )}
 
                 {/* 2. Photo / Image Message */}
-                {msg.type === 'image' && msg.mediaUrl && (
+                {(msg.type === 'image' || !!msg.photosAttached) && (msg.mediaUrl || msg.photosAttached) && (
                   <div className="space-y-1.5">
                     <div
-                      onClick={() => setFullscreenImage(msg.mediaUrl || null)}
+                      onClick={() => setFullscreenImage(msg.mediaUrl || msg.photosAttached || null)}
                       className="rounded-xl overflow-hidden cursor-pointer max-h-72 bg-slate-100 border border-black/5 hover:opacity-95 transition"
                     >
                       <img
-                        src={msg.mediaUrl}
+                        src={msg.mediaUrl || msg.photosAttached}
                         alt="Foto enviada"
                         className="w-full h-auto object-cover max-h-72 rounded-xl"
                         referrerPolicy="no-referrer"
