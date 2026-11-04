@@ -1,0 +1,6 @@
+{
+  "name": "ZapProgramaCerto",
+  "description": "Aplicativo moderno de mensagens instantâneas e conversas em tempo real com envio de áudio, fotos e contatos.",
+  "requestFramePermissions": ["microphone", "camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
