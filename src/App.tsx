@@ -36,6 +36,10 @@ export default function App() {
     const user = storage.getCurrentUser();
     if (user) {
       setCurrentUser(user);
+    } else {
+      storage.restoreSession().then((u) => {
+        if (u) setCurrentUser(u);
+      });
     }
   }, []);
 

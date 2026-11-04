@@ -59,12 +59,12 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const base64 = reader.result as string;
-      const result = storage.updateProfile(currentUser.id, { avatar: base64 });
+      const result = await storage.updateProfile(currentUser.id, { avatar: base64 });
       if (result.success && result.user) {
         onUpdateUser(result.user);
-        setProfileSuccess('Foto de perfil atualizada!');
+        setProfileSuccess('Foto de perfil atualizada no banco de dados!');
         setTimeout(() => setProfileSuccess(null), 3000);
       }
     };
@@ -76,8 +76,8 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   };
 
   // Handle Remove Photo
-  const handleRemovePhoto = () => {
-    const result = storage.updateProfile(currentUser.id, { avatar: '' });
+  const handleRemovePhoto = async () => {
+    const result = await storage.updateProfile(currentUser.id, { avatar: '' });
     if (result.success && result.user) {
       onUpdateUser(result.user);
       setProfileSuccess('Foto de perfil removida.');
@@ -85,20 +85,20 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     }
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     setProfileSuccess(null);
     if (!name.trim()) return;
 
-    const result = storage.updateProfile(currentUser.id, { name, bio });
+    const result = await storage.updateProfile(currentUser.id, { name, bio });
     if (result.success && result.user) {
       onUpdateUser(result.user);
-      setProfileSuccess('Perfil atualizado com sucesso!');
+      setProfileSuccess('Perfil atualizado com sucesso no banco de dados!');
       setTimeout(() => setProfileSuccess(null), 3000);
     }
   };
 
-  const handleChangePassword = (e: React.FormEvent) => {
+  const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPasswordError(null);
     setPasswordSuccess(null);
@@ -116,7 +116,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
       return;
     }
 
-    const result = storage.updatePassword(currentUser.id, currentPassword, newPassword);
+    const result = await storage.updatePassword(currentUser.id, currentPassword, newPassword);
     if (result.success) {
       setPasswordSuccess(result.message || 'Senha alterada com sucesso!');
       setCurrentPassword('');

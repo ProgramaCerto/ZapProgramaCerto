@@ -4,15 +4,8 @@ import { getSupabaseClient } from './supabase';
 import { uploadPhotoToSupabase } from './storageUpload';
 import { notifyNewMessage } from '../utils/notifications';
 
-const STORAGE_KEYS = {
-  USERS: 'zapprogramacerto_users_db',
-  CURRENT_USER: 'zapprogramacerto_session_user',
-  SAVED_CREDENTIALS: 'zapprogramacerto_saved_credentials',
-  SAVED_CONTACTS: 'zapprogramacerto_saved_contacts',
-  CHATS: 'zapprogramacerto_chats_db',
-  MESSAGES: 'zapprogramacerto_messages_db',
-  PREFILLED_HANDLE: 'zapprogramacerto_prefilled_handle',
-};
+const SESSION_KEY = 'zapprogramacerto_session_user_id';
+const PREFILLED_KEY = 'zapprogramacerto_prefilled_handle';
 
 export function getConversationId(userId1: string, userId2: string): string {
   const sorted = [userId1, userId2].sort();
@@ -31,36 +24,32 @@ class StorageService {
   private syncInterval: NodeJS.Timeout | null = null;
   public isContinuousSyncActive = true;
 
+  // Estado exclusivamente em memória RAM (nada de mensagens, fotos ou contatos salvos no celular)
+  private memoryUsers: User[] = [];
+  private memoryContacts: SavedContact[] = [];
+  private memoryMessages: Message[] = [];
+  private memoryCurrentUser: User | null = null;
+
   constructor() {
-    this.initDatabase();
+    this.cleanDeviceStorage();
     this.startContinuousPolling();
     this.initSupabaseRealtime();
+    this.restoreSession().catch(() => {});
   }
 
-  private initDatabase() {
+  /**
+   * Limpa qualquer resquício de dados armazenados no navegador/celular
+   * Garantindo que mensagens, contatos e usuários fiquem exclusivamente no banco de dados
+   */
+  private cleanDeviceStorage() {
     if (typeof window === 'undefined') return;
-    if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify([]));
-    }
-    if (!localStorage.getItem(STORAGE_KEYS.CHATS)) {
-      localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify([]));
-    }
-    if (!localStorage.getItem(STORAGE_KEYS.MESSAGES)) {
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify([]));
-    }
-    if (!localStorage.getItem(STORAGE_KEYS.SAVED_CONTACTS)) {
-      localStorage.setItem(STORAGE_KEYS.SAVED_CONTACTS, JSON.stringify([]));
-    }
-
-    // Clean up any remaining legacy bot contacts or messages
     try {
-      const msgs = this.getStoredMessages().filter(
-        (m) => !m.senderId.includes('bot') && m.senderHandle !== '@suporte'
-      );
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(msgs));
-
-      const users = this.getUsers().filter((u) => u.handle !== '@suporte' && u.id !== 'user_suporte');
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+      localStorage.removeItem('zapprogramacerto_users_db');
+      localStorage.removeItem('zapprogramacerto_chats_db');
+      localStorage.removeItem('zapprogramacerto_messages_db');
+      localStorage.removeItem('zapprogramacerto_saved_contacts');
+      localStorage.removeItem('zapprogramacerto_saved_credentials');
+      localStorage.removeItem('zapprogramacerto_session_user');
     } catch {
       // Safe
     }
@@ -119,7 +108,7 @@ class StorageService {
       const messages = this.getStoredMessages();
       let existingIndex = messages.findIndex((m) => m.id === row.id);
 
-      // Se não encontrou por ID exato, procura por mensagem otimista com mesmo remetente, destinatário e texto (enviada com ID temporário msg_)
+      // Se não encontrou por ID exato, procura por mensagem otimista com mesmo remetente, destinatário e texto
       if (existingIndex === -1) {
         existingIndex = messages.findIndex(
           (m) =>
@@ -197,7 +186,7 @@ class StorageService {
     }
   }
 
-  // Polling loop for background synchronization
+  // Polling loop for background synchronization directly with Supabase
   private startContinuousPolling() {
     if (typeof window === 'undefined') return;
     if (this.syncInterval) clearInterval(this.syncInterval);
@@ -205,12 +194,11 @@ class StorageService {
     this.syncInterval = setInterval(() => {
       if (this.isContinuousSyncActive) {
         this.syncWithSupabase();
-        this.notifyListeners();
       }
     }, 1200);
   }
 
-  private async syncWithSupabase() {
+  public async syncWithSupabase() {
     const client = getSupabaseClient();
     if (!client) return;
 
@@ -218,20 +206,20 @@ class StorageService {
       const currentUser = this.getCurrentUser();
       if (!currentUser) return;
 
-      // Sync users & contacts first
+      // Sync users & contacts directly from the database
       await this.syncRemoteUsers();
       await this.syncRemoteContacts();
 
-      // Sync latest messages for current user
+      // Sync latest messages for current user directly from the database
       const { data: remoteMsgs, error } = await client
         .from('mensagens')
         .select('*')
         .or(`remetente_id.eq.${currentUser.id},destinatario_id.eq.${currentUser.id}`)
         .order('criado_em', { ascending: true })
-        .limit(150);
+        .limit(200);
 
-      if (!error && remoteMsgs && remoteMsgs.length > 0) {
-        const localMessages = this.getStoredMessages();
+      if (!error && remoteMsgs) {
+        const localMessages = [...this.memoryMessages];
         let changed = false;
 
         for (const rm of remoteMsgs) {
@@ -245,7 +233,7 @@ class StorageService {
 
           const chatId = getConversationId(rm.remetente_id, rm.destinatario_id);
 
-          // Se não encontrou por ID exato, procura por mensagem otimista com mesmo remetente, destinatário e texto
+          // Se não encontrou por ID exato, procura por mensagem otimista
           if (idx === -1) {
             idx = localMessages.findIndex(
               (lm) =>
@@ -279,7 +267,7 @@ class StorageService {
             });
             changed = true;
 
-            // Make sure the contact user profile is cached locally
+            // Make sure the contact user profile is cached in memory
             this.ensureUserCached(rm.remetente_id === currentUser.id ? rm.destinatario_id : rm.remetente_id);
 
             if (rm.destinatario_id === currentUser.id) {
@@ -306,7 +294,7 @@ class StorageService {
           }
         }
 
-        if (changed) {
+        if (changed || localMessages.length !== this.memoryMessages.length) {
           this.saveMessages(localMessages);
         }
       }
@@ -319,9 +307,9 @@ class StorageService {
     const client = getSupabaseClient();
     if (!client) return;
     try {
-      const { data, error } = await client.from('usuarios').select('*').limit(200);
+      const { data, error } = await client.from('usuarios').select('*').limit(300);
       if (!error && data) {
-        const local = this.getUsers();
+        const local = [...this.memoryUsers];
         let changed = false;
 
         for (const u of data) {
@@ -351,7 +339,8 @@ class StorageService {
         }
 
         if (changed) {
-          this.saveUsers(local);
+          this.memoryUsers = local;
+          this.notifyListeners();
         }
       }
     } catch {
@@ -372,7 +361,8 @@ class StorageService {
         .eq('usuario_id', currentUser.id);
 
       if (!error && data) {
-        localStorage.setItem(STORAGE_KEYS.SAVED_CONTACTS, JSON.stringify(data));
+        this.memoryContacts = data;
+        this.notifyListeners();
       }
     } catch {
       // Safe
@@ -380,8 +370,7 @@ class StorageService {
   }
 
   private async ensureUserCached(userId: string) {
-    const users = this.getUsers();
-    if (users.find((u) => u.id === userId)) return;
+    if (this.memoryUsers.find((u) => u.id === userId)) return;
 
     const client = getSupabaseClient();
     if (!client) return;
@@ -399,9 +388,8 @@ class StorageService {
           online: data.online,
           createdAt: data.criado_em || new Date().toISOString(),
         };
-        const current = this.getUsers();
-        current.push(mappedUser);
-        this.saveUsers(current);
+        this.memoryUsers.push(mappedUser);
+        this.notifyListeners();
       }
     } catch {
       // Safe
@@ -425,62 +413,93 @@ class StorageService {
     }
   }
 
-  // --- Users & Session Persistence ---
+  // --- Users & Session ---
   public getUsers(): User[] {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.USERS);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
+    return this.memoryUsers;
   }
 
   public saveUsers(users: User[]) {
-    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    this.memoryUsers = users;
     this.notifyListeners();
   }
 
   public getCurrentUser(): User | null {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
+    return this.memoryCurrentUser;
   }
 
   public setCurrentUser(user: User | null) {
-    if (user) {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
-      if (user.password) {
-        localStorage.setItem(
-          STORAGE_KEYS.SAVED_CREDENTIALS,
-          JSON.stringify({
-            handle: user.handle,
-            password: user.password,
-          })
-        );
+    this.memoryCurrentUser = user;
+    if (typeof window !== 'undefined') {
+      if (user) {
+        sessionStorage.setItem(SESSION_KEY, user.id);
+        localStorage.setItem(SESSION_KEY, user.id);
+      } else {
+        sessionStorage.removeItem(SESSION_KEY);
+        localStorage.removeItem(SESSION_KEY);
       }
-    } else {
-      localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-      localStorage.removeItem(STORAGE_KEYS.SAVED_CREDENTIALS);
+    }
+    if (user) {
+      this.syncWithSupabase();
     }
     this.notifyListeners();
   }
 
+  /**
+   * Restaura a sessão do usuário puxando suas informações atualizadas
+   * diretamente do banco de dados Supabase
+   */
+  public async restoreSession(): Promise<User | null> {
+    if (typeof window === 'undefined') return null;
+    const userId = sessionStorage.getItem(SESSION_KEY) || localStorage.getItem(SESSION_KEY);
+    if (!userId) return null;
+
+    const client = getSupabaseClient();
+    if (!client) return this.memoryCurrentUser;
+
+    try {
+      const { data, error } = await client.from('usuarios').select('*').eq('id', userId).maybeSingle();
+      if (!error && data) {
+        const user: User = {
+          id: data.id,
+          name: data.nome,
+          handle: data.arroba,
+          password: data.senha,
+          avatar: data.avatar_url || '',
+          bio: data.bio || 'Disponível no ZapProgramaCerto',
+          online: data.online,
+          createdAt: data.criado_em || new Date().toISOString(),
+        };
+        this.memoryCurrentUser = user;
+        const idx = this.memoryUsers.findIndex((u) => u.id === user.id);
+        if (idx >= 0) this.memoryUsers[idx] = user;
+        else this.memoryUsers.push(user);
+
+        this.syncWithSupabase();
+        this.notifyListeners();
+        return user;
+      }
+    } catch {
+      // Safe
+    }
+    return this.memoryCurrentUser;
+  }
+
   public getPrefilledHandle(): string {
-    return localStorage.getItem(STORAGE_KEYS.PREFILLED_HANDLE) || '';
+    if (typeof window === 'undefined') return '';
+    return sessionStorage.getItem(PREFILLED_KEY) || '';
   }
 
   public setPrefilledHandle(handle: string) {
-    localStorage.setItem(STORAGE_KEYS.PREFILLED_HANDLE, handle);
+    if (typeof window === 'undefined') return;
+    sessionStorage.setItem(PREFILLED_KEY, handle);
   }
 
   public clearPrefilledHandle() {
-    localStorage.removeItem(STORAGE_KEYS.PREFILLED_HANDLE);
+    if (typeof window === 'undefined') return;
+    sessionStorage.removeItem(PREFILLED_KEY);
   }
 
-  // --- Register & Login ---
+  // --- Register & Login no Banco de Dados ---
   public async register(
     name: string,
     rawHandle: string,
@@ -504,62 +523,61 @@ class StorageService {
     }
 
     const client = getSupabaseClient();
-    if (client) {
-      try {
-        const { data: existing } = await client
-          .from('usuarios')
-          .select('id')
-          .ilike('arroba', cleanHandle)
-          .maybeSingle();
-
-        if (existing) {
-          return { success: false, message: 'Este usuário já está cadastrado. Escolha outro.' };
-        }
-      } catch {
-        // Safe
-      }
+    if (!client) {
+      return { success: false, message: 'Banco de dados não disponível. Tente novamente mais tarde.' };
     }
 
-    const newUser: User = {
-      id: `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      name: name.trim(),
-      handle: cleanHandle,
-      password,
-      avatar: customAvatar || '',
-      bio: 'Disponível no ZapProgramaCerto',
-      online: true,
-      createdAt: new Date().toISOString(),
-    };
+    try {
+      // Verifica no banco de dados se já existe
+      const { data: existing } = await client
+        .from('usuarios')
+        .select('id')
+        .ilike('arroba', cleanHandle)
+        .maybeSingle();
 
-    if (client) {
-      try {
-        const { data, error } = await client
-          .from('usuarios')
-          .insert({
-            nome: newUser.name,
-            arroba: newUser.handle,
-            senha: newUser.password,
-            avatar_url: newUser.avatar,
-            bio: newUser.bio,
-            online: true,
-          })
-          .select()
-          .maybeSingle();
-
-        if (!error && data?.id) {
-          newUser.id = data.id;
-        }
-      } catch (e) {
-        console.warn('Supabase register error, using generated id', e);
+      if (existing) {
+        return { success: false, message: 'Este usuário já está cadastrado no banco de dados. Escolha outro.' };
       }
+
+      const { data, error } = await client
+        .from('usuarios')
+        .insert({
+          nome: name.trim(),
+          arroba: cleanHandle,
+          senha: password,
+          avatar_url: customAvatar || '',
+          bio: 'Disponível no ZapProgramaCerto',
+          online: true,
+        })
+        .select()
+        .maybeSingle();
+
+      if (error || !data) {
+        return { success: false, message: 'Erro ao salvar novo usuário no banco de dados.' };
+      }
+
+      const newUser: User = {
+        id: data.id,
+        name: data.nome,
+        handle: data.arroba,
+        password: data.senha,
+        avatar: data.avatar_url || '',
+        bio: data.bio || 'Disponível no ZapProgramaCerto',
+        online: true,
+        createdAt: data.criado_em || new Date().toISOString(),
+      };
+
+      const idx = this.memoryUsers.findIndex((u) => u.id === newUser.id);
+      if (idx >= 0) this.memoryUsers[idx] = newUser;
+      else this.memoryUsers.push(newUser);
+
+      this.setPrefilledHandle(cleanHandle);
+      this.notifyListeners();
+      return { success: true, user: newUser };
+    } catch (e) {
+      console.error('Erro ao cadastrar usuário:', e);
+      return { success: false, message: 'Falha de comunicação com o banco de dados.' };
     }
-
-    const users = this.getUsers();
-    users.push(newUser);
-    this.saveUsers(users);
-
-    this.setPrefilledHandle(cleanHandle);
-    return { success: true, user: newUser };
   }
 
   public async login(
@@ -573,135 +591,154 @@ class StorageService {
     cleanHandle = cleanHandle.toLowerCase();
 
     const client = getSupabaseClient();
-    if (client) {
-      try {
-        const { data, error } = await client
-          .from('usuarios')
-          .select('*')
-          .ilike('arroba', cleanHandle)
-          .maybeSingle();
+    if (!client) {
+      return { success: false, message: 'Conexão com o banco de dados indisponível.' };
+    }
 
-        if (!error && data) {
-          if (data.senha !== password) {
-            return { success: false, message: 'Senha incorreta. Verifique e tente novamente.' };
-          }
+    try {
+      const { data, error } = await client
+        .from('usuarios')
+        .select('*')
+        .ilike('arroba', cleanHandle)
+        .maybeSingle();
 
-          const remoteUser: User = {
-            id: data.id,
-            name: data.nome,
-            handle: data.arroba,
-            password: data.senha,
-            avatar: data.avatar_url || '',
-            bio: data.bio || 'Disponível no ZapProgramaCerto',
-            online: true,
-            createdAt: data.criado_em || new Date().toISOString(),
-          };
-
-          this.setCurrentUser(remoteUser);
-          this.clearPrefilledHandle();
-
-          const users = this.getUsers();
-          const localIdx = users.findIndex((u) => u.id === remoteUser.id);
-          if (localIdx >= 0) users[localIdx] = remoteUser;
-          else users.push(remoteUser);
-          this.saveUsers(users);
-
-          return { success: true, user: remoteUser };
-        }
-      } catch (e) {
-        console.warn('Supabase login check fallback', e);
+      if (error || !data) {
+        return { success: false, message: 'Usuário não encontrado no banco de dados com este arroba (@).' };
       }
-    }
 
-    // Local fallback
-    const users = this.getUsers();
-    const user = users.find((u) => u.handle.toLowerCase() === cleanHandle);
+      if (data.senha !== password) {
+        return { success: false, message: 'Senha incorreta. Verifique e tente novamente.' };
+      }
 
-    if (!user) {
-      return { success: false, message: 'Usuário não encontrado com este arroba (@).' };
-    }
-    if (user.password !== password) {
-      return { success: false, message: 'Senha incorreta. Verifique e tente novamente.' };
-    }
+      const remoteUser: User = {
+        id: data.id,
+        name: data.nome,
+        handle: data.arroba,
+        password: data.senha,
+        avatar: data.avatar_url || '',
+        bio: data.bio || 'Disponível no ZapProgramaCerto',
+        online: true,
+        createdAt: data.criado_em || new Date().toISOString(),
+      };
 
-    this.setCurrentUser(user);
-    this.clearPrefilledHandle();
-    return { success: true, user };
+      this.setCurrentUser(remoteUser);
+      this.clearPrefilledHandle();
+
+      const idx = this.memoryUsers.findIndex((u) => u.id === remoteUser.id);
+      if (idx >= 0) this.memoryUsers[idx] = remoteUser;
+      else this.memoryUsers.push(remoteUser);
+
+      // Sincroniza imediatamente mensagens e contatos do usuário direto do banco
+      this.syncWithSupabase();
+      this.notifyListeners();
+
+      return { success: true, user: remoteUser };
+    } catch (e) {
+      console.error('Erro ao efetuar login:', e);
+      return { success: false, message: 'Falha de conexão com o banco de dados.' };
+    }
   }
 
-  public updatePassword(userId: string, currentPass: string, newPass: string): { success: boolean; message?: string } {
-    const users = this.getUsers();
-    const index = users.findIndex((u) => u.id === userId);
-    if (index === -1) {
-      return { success: false, message: 'Usuário não encontrado.' };
-    }
-
-    if (users[index].password !== currentPass) {
-      return { success: false, message: 'Senha atual incorreta.' };
-    }
-
+  public async updatePassword(userId: string, currentPass: string, newPass: string): Promise<{ success: boolean; message?: string }> {
     if (newPass.length < 3) {
       return { success: false, message: 'A nova senha deve ter no mínimo 3 caracteres.' };
     }
 
-    users[index].password = newPass;
-    this.saveUsers(users);
-
-    const current = this.getCurrentUser();
-    if (current && current.id === userId) {
-      current.password = newPass;
-      this.setCurrentUser(current);
-    }
-
     const client = getSupabaseClient();
-    if (client) {
-      Promise.resolve(client.from('usuarios').update({ senha: newPass }).eq('id', userId)).catch(() => {});
+    if (!client) {
+      return { success: false, message: 'Banco de dados não disponível.' };
     }
 
-    return { success: true, message: 'Senha alterada com sucesso!' };
+    try {
+      // Confirma senha atual no banco
+      const { data: user, error: fetchErr } = await client
+        .from('usuarios')
+        .select('senha')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (fetchErr || !user) {
+        return { success: false, message: 'Usuário não encontrado no banco de dados.' };
+      }
+
+      if (user.senha !== currentPass) {
+        return { success: false, message: 'Senha atual incorreta.' };
+      }
+
+      const { error: updateErr } = await client
+        .from('usuarios')
+        .update({ senha: newPass })
+        .eq('id', userId);
+
+      if (updateErr) {
+        return { success: false, message: 'Erro ao salvar nova senha no banco de dados.' };
+      }
+
+      const localIdx = this.memoryUsers.findIndex((u) => u.id === userId);
+      if (localIdx >= 0) {
+        this.memoryUsers[localIdx].password = newPass;
+      }
+      if (this.memoryCurrentUser && this.memoryCurrentUser.id === userId) {
+        this.memoryCurrentUser.password = newPass;
+      }
+
+      this.notifyListeners();
+      return { success: true, message: 'Senha alterada com sucesso no banco de dados!' };
+    } catch {
+      return { success: false, message: 'Erro de comunicação ao atualizar senha.' };
+    }
   }
 
-  public updateProfile(
+  public async updateProfile(
     userId: string,
     updates: { name?: string; bio?: string; avatar?: string }
-  ): { success: boolean; user?: User } {
-    const users = this.getUsers();
-    const index = users.findIndex((u) => u.id === userId);
-    if (index === -1) return { success: false };
-
-    if (updates.name) users[index].name = updates.name.trim();
-    if (updates.bio !== undefined) users[index].bio = updates.bio.trim();
-    if (updates.avatar !== undefined) users[index].avatar = updates.avatar;
-
-    this.saveUsers(users);
-    const updated = users[index];
-    this.setCurrentUser(updated);
-
+  ): Promise<{ success: boolean; user?: User }> {
     const client = getSupabaseClient();
-    if (client) {
-      Promise.resolve(
-        client
-          .from('usuarios')
-          .update({
-            nome: updated.name,
-            bio: updated.bio,
-            avatar_url: updated.avatar,
-          })
-          .eq('id', userId)
-      ).catch(() => {});
-    }
+    if (!client) return { success: false };
 
-    return { success: true, user: updated };
+    try {
+      const updatePayload: Record<string, unknown> = {};
+      if (updates.name) updatePayload.nome = updates.name.trim();
+      if (updates.bio !== undefined) updatePayload.bio = updates.bio.trim();
+      if (updates.avatar !== undefined) updatePayload.avatar_url = updates.avatar;
+
+      const { data, error } = await client
+        .from('usuarios')
+        .update(updatePayload)
+        .eq('id', userId)
+        .select()
+        .maybeSingle();
+
+      if (!error && data) {
+        const updated: User = {
+          id: data.id,
+          name: data.nome,
+          handle: data.arroba,
+          password: data.senha,
+          avatar: data.avatar_url || '',
+          bio: data.bio || 'Disponível no ZapProgramaCerto',
+          online: data.online,
+          createdAt: data.criado_em || new Date().toISOString(),
+        };
+
+        const idx = this.memoryUsers.findIndex((u) => u.id === userId);
+        if (idx >= 0) this.memoryUsers[idx] = updated;
+        if (this.memoryCurrentUser && this.memoryCurrentUser.id === userId) {
+          this.memoryCurrentUser = updated;
+        }
+
+        this.notifyListeners();
+        return { success: true, user: updated };
+      }
+    } catch {
+      // Safe
+    }
+    return { success: false };
   }
 
-  // --- Saved Contacts Management ---
+  // --- Contatos exclusivamente no Banco de Dados ---
   public getSavedContacts(): SavedContact[] {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.SAVED_CONTACTS);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
+    return this.memoryContacts;
   }
 
   public async saveContact(
@@ -709,44 +746,42 @@ class StorageService {
     contatoId: string,
     nomeSalvo: string
   ): Promise<{ success: boolean; message?: string }> {
-    const contacts = this.getSavedContacts();
-    const idx = contacts.findIndex(
-      (c) => c.usuario_id === usuarioId && c.contato_id === contatoId
-    );
-
-    if (idx >= 0) {
-      contacts[idx].nome_salvo = nomeSalvo.trim();
-    } else {
-      contacts.push({
-        usuario_id: usuarioId,
-        contato_id: contatoId,
-        nome_salvo: nomeSalvo.trim(),
-      });
-    }
-
-    localStorage.setItem(STORAGE_KEYS.SAVED_CONTACTS, JSON.stringify(contacts));
-
+    const cleanName = nomeSalvo.trim();
     const client = getSupabaseClient();
+
     if (client) {
       try {
         await client.from('contatos').upsert(
           {
             usuario_id: usuarioId,
             contato_id: contatoId,
-            nome_salvo: nomeSalvo.trim(),
+            nome_salvo: cleanName,
           },
           { onConflict: 'usuario_id,contato_id' }
         );
       } catch (e) {
-        console.warn('Error saving contact to Supabase:', e);
+        console.warn('Erro ao salvar contato no banco de dados:', e);
       }
     }
 
+    // Atualiza estado em memória
+    const idx = this.memoryContacts.findIndex(
+      (c) => c.usuario_id === usuarioId && c.contato_id === contatoId
+    );
+    if (idx >= 0) {
+      this.memoryContacts[idx].nome_salvo = cleanName;
+    } else {
+      this.memoryContacts.push({
+        usuario_id: usuarioId,
+        contato_id: contatoId,
+        nome_salvo: cleanName,
+      });
+    }
+
     this.notifyListeners();
-    return { success: true, message: 'Contato salvo com sucesso!' };
+    return { success: true, message: 'Contato salvo com sucesso no banco de dados!' };
   }
 
-  // Search User by Handle in Supabase
   public async searchUserByHandle(rawHandle: string): Promise<User | null> {
     let cleanHandle = rawHandle.trim().toLowerCase();
     if (!cleanHandle.startsWith('@')) {
@@ -772,11 +807,10 @@ class StorageService {
             online: data.online,
             createdAt: data.criado_em || new Date().toISOString(),
           };
-          const users = this.getUsers();
-          const idx = users.findIndex((u) => u.id === user.id);
-          if (idx >= 0) users[idx] = user;
-          else users.push(user);
-          this.saveUsers(users);
+
+          const idx = this.memoryUsers.findIndex((u) => u.id === user.id);
+          if (idx >= 0) this.memoryUsers[idx] = user;
+          else this.memoryUsers.push(user);
 
           return user;
         }
@@ -785,11 +819,9 @@ class StorageService {
       }
     }
 
-    const users = this.getUsers();
-    return users.find((u) => u.handle.toLowerCase() === cleanHandle) || null;
+    return this.memoryUsers.find((u) => u.handle.toLowerCase() === cleanHandle) || null;
   }
 
-  // Add Contact action from user
   public async addContact(
     currentUserId: string,
     rawHandle: string,
@@ -811,11 +843,11 @@ class StorageService {
     if (!targetUser) {
       return {
         success: false,
-        message: `Nenhum usuário foi encontrado com o arroba ${cleanHandle}. Verifique e tente novamente.`,
+        message: `Nenhum usuário foi encontrado com o arroba ${cleanHandle} no banco de dados.`,
       };
     }
 
-    // Save contact relation
+    // Salva a relação de contato diretamente no banco de dados Supabase
     await this.saveContact(currentUserId, targetUser.id, nomeSalvo.trim() || targetUser.name);
 
     const chatId = getConversationId(currentUserId, targetUser.id);
@@ -832,7 +864,7 @@ class StorageService {
     return { success: true, message: 'Contato adicionado!', chat: newChat };
   }
 
-  // Deduplica mensagens para evitar qualquer duplicação na interface
+  // --- Deduplicação de Mensagens em Memória ---
   public deduplicateMessages(messages: Message[]): Message[] {
     const seenIds = new Set<string>();
     const result: Message[] = [];
@@ -841,7 +873,6 @@ class StorageService {
       if (!msg || !msg.id) continue;
       if (seenIds.has(msg.id)) continue;
 
-      // Verifica se já existe mensagem idêntica do mesmo remetente para o mesmo destinatário com mesmo texto enviada num intervalo curto
       const dupIdx = result.findIndex((existing) => {
         if (existing.senderId !== msg.senderId || existing.recipientId !== msg.recipientId) {
           return false;
@@ -858,7 +889,6 @@ class StorageService {
       });
 
       if (dupIdx >= 0) {
-        // Se a mensagem existente tinha ID temporário msg_ e a nova tem o ID definitivo do banco, promove o ID
         const existing = result[dupIdx];
         if (existing.id.startsWith('msg_') && !msg.id.startsWith('msg_')) {
           seenIds.delete(existing.id);
@@ -875,20 +905,13 @@ class StorageService {
     return result;
   }
 
-  // --- Realtime Chats & Messages between humans ---
+  // --- Mensagens diretamente do Banco de Dados ---
   public getStoredMessages(): Message[] {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-      const parsed: Message[] = raw ? JSON.parse(raw) : [];
-      return this.deduplicateMessages(parsed);
-    } catch {
-      return [];
-    }
+    return this.deduplicateMessages(this.memoryMessages);
   }
 
   public saveMessages(messages: Message[]) {
-    const clean = this.deduplicateMessages(messages);
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(clean));
+    this.memoryMessages = this.deduplicateMessages(messages);
     this.notifyListeners();
   }
 
@@ -898,7 +921,7 @@ class StorageService {
   }
 
   /**
-   * Builds the real list of conversations dynamically from messages and saved contacts
+   * Constrói a lista dinâmica de conversas exclusivamente puxando do banco de dados
    */
   public getUserChats(userId: string): Chat[] {
     const messages = this.getStoredMessages();
@@ -1028,8 +1051,8 @@ class StorageService {
   }
 
   /**
-   * Real message sender: sends message to Supabase and saves locally.
-   * ZERO AI / BOT RESPONDERS!
+   * Envio de mensagem com inserção direta no banco de dados Supabase
+   * Zero armazenamento no celular!
    */
   public async sendMessage(params: {
     chatId: string;
@@ -1053,7 +1076,7 @@ class StorageService {
     let mediaUrlToStore = params.mediaUrl;
     let photosAttachedToStore = params.photosAttached;
 
-    // Se for foto, envia para o Banco de Fotos (Supabase Storage) para ter URL pública permanente
+    // Se for foto, envia para o Bucket de Fotos (Supabase Storage) para ter URL pública permanente
     if (params.type === 'image') {
       const candidate = params.mediaUrl || params.photosAttached;
       if (candidate && (candidate.startsWith('data:') || candidate.startsWith('blob:'))) {
@@ -1087,13 +1110,14 @@ class StorageService {
       status: 'sending',
     };
 
+    // Atualiza apenas em memória durante a sessão
     const messages = this.getStoredMessages();
     messages.push(newMessage);
     this.saveMessages(messages);
 
     soundEffects.playSendSound();
 
-    // Insert into real Supabase database!
+    // Insere diretamente no Banco de Dados Supabase!
     const client = getSupabaseClient();
     if (client && resolvedRecipientId) {
       try {
@@ -1113,7 +1137,7 @@ class StorageService {
           .maybeSingle();
 
         if (error) {
-          console.error('Erro ao inserir mensagem no Supabase:', error);
+          console.error('Erro ao inserir mensagem no banco de dados:', error);
         }
 
         if (!error && data?.id) {
@@ -1133,13 +1157,12 @@ class StorageService {
           }
           this.saveMessages(currentList);
         } else {
-          // Fallback delivered status
           setTimeout(() => {
             this.updateLocalStatus(tempId, 'delivered');
           }, 400);
         }
       } catch (err) {
-        console.warn('Supabase insert error, keeping local message:', err);
+        console.warn('Erro ao inserir no banco de dados:', err);
         setTimeout(() => {
           this.updateLocalStatus(tempId, 'delivered');
         }, 400);
