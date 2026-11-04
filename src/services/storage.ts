@@ -117,7 +117,19 @@ class StorageService {
       };
 
       const messages = this.getStoredMessages();
-      const existingIndex = messages.findIndex((m) => m.id === row.id);
+      let existingIndex = messages.findIndex((m) => m.id === row.id);
+
+      // Se não encontrou por ID exato, procura por mensagem otimista com mesmo remetente, destinatário e texto (enviada com ID temporário msg_)
+      if (existingIndex === -1) {
+        existingIndex = messages.findIndex(
+          (m) =>
+            m.senderId === row.remetente_id &&
+            m.recipientId === row.destinatario_id &&
+            (m.text || '') === (row.texto || '') &&
+            m.type === (row.tipo || (row.fotos_anexadas ? 'image' : row.audio_url ? 'audio' : 'text')) &&
+            Math.abs(new Date(m.timestamp).getTime() - new Date(row.criado_em || Date.now()).getTime()) < 30000
+        );
+      }
 
       const mappedStatus: 'sending' | 'delivered' | 'read' =
         row.status === 'lida' || row.status === 'read'
@@ -146,7 +158,7 @@ class StorageService {
       const currentUser = this.getCurrentUser();
 
       if (existingIndex >= 0) {
-        messages[existingIndex] = { ...messages[existingIndex], ...mappedMsg };
+        messages[existingIndex] = { ...messages[existingIndex], ...mappedMsg, id: row.id };
       } else {
         messages.push(mappedMsg);
         if (currentUser && mappedMsg.recipientId === currentUser.id) {
@@ -223,7 +235,7 @@ class StorageService {
         let changed = false;
 
         for (const rm of remoteMsgs) {
-          const idx = localMessages.findIndex((lm) => lm.id === rm.id);
+          let idx = localMessages.findIndex((lm) => lm.id === rm.id);
           const mappedStatus: 'sending' | 'delivered' | 'read' =
             rm.status === 'lida' || rm.status === 'read'
               ? 'read'
@@ -232,6 +244,23 @@ class StorageService {
               : 'sending';
 
           const chatId = getConversationId(rm.remetente_id, rm.destinatario_id);
+
+          // Se não encontrou por ID exato, procura por mensagem otimista com mesmo remetente, destinatário e texto
+          if (idx === -1) {
+            idx = localMessages.findIndex(
+              (lm) =>
+                lm.senderId === rm.remetente_id &&
+                lm.recipientId === rm.destinatario_id &&
+                (lm.text || '') === (rm.texto || '') &&
+                lm.type === (rm.tipo || (rm.fotos_anexadas ? 'image' : rm.audio_url ? 'audio' : 'text')) &&
+                Math.abs(new Date(lm.timestamp).getTime() - new Date(rm.criado_em || Date.now()).getTime()) < 30000
+            );
+            if (idx >= 0) {
+              localMessages[idx].id = rm.id;
+              localMessages[idx].status = mappedStatus;
+              changed = true;
+            }
+          }
 
           if (idx === -1) {
             localMessages.push({
@@ -803,18 +832,63 @@ class StorageService {
     return { success: true, message: 'Contato adicionado!', chat: newChat };
   }
 
+  // Deduplica mensagens para evitar qualquer duplicação na interface
+  public deduplicateMessages(messages: Message[]): Message[] {
+    const seenIds = new Set<string>();
+    const result: Message[] = [];
+
+    for (const msg of messages) {
+      if (!msg || !msg.id) continue;
+      if (seenIds.has(msg.id)) continue;
+
+      // Verifica se já existe mensagem idêntica do mesmo remetente para o mesmo destinatário com mesmo texto enviada num intervalo curto
+      const dupIdx = result.findIndex((existing) => {
+        if (existing.senderId !== msg.senderId || existing.recipientId !== msg.recipientId) {
+          return false;
+        }
+        if (existing.type !== msg.type) return false;
+        if ((existing.text || '') !== (msg.text || '')) return false;
+        if (existing.mediaUrl && msg.mediaUrl && existing.mediaUrl !== msg.mediaUrl) {
+          return false;
+        }
+        const diff = Math.abs(
+          new Date(existing.timestamp).getTime() - new Date(msg.timestamp).getTime()
+        );
+        return diff < 25000;
+      });
+
+      if (dupIdx >= 0) {
+        // Se a mensagem existente tinha ID temporário msg_ e a nova tem o ID definitivo do banco, promove o ID
+        const existing = result[dupIdx];
+        if (existing.id.startsWith('msg_') && !msg.id.startsWith('msg_')) {
+          seenIds.delete(existing.id);
+          result[dupIdx] = { ...msg };
+          seenIds.add(msg.id);
+        }
+        continue;
+      }
+
+      seenIds.add(msg.id);
+      result.push(msg);
+    }
+
+    return result;
+  }
+
   // --- Realtime Chats & Messages between humans ---
   public getStoredMessages(): Message[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-      return raw ? JSON.parse(raw) : [];
+      const parsed: Message[] = raw ? JSON.parse(raw) : [];
+      return this.deduplicateMessages(parsed);
     } catch {
       return [];
     }
   }
 
   public saveMessages(messages: Message[]) {
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages));
+    const clean = this.deduplicateMessages(messages);
+    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(clean));
     this.notifyListeners();
   }
 
@@ -995,8 +1069,9 @@ class StorageService {
       }
     }
 
+    const tempId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const newMessage: Message = {
-      id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      id: tempId,
       chatId: stableChatId,
       senderId: params.senderId,
       senderHandle: params.senderHandle,
@@ -1042,24 +1117,36 @@ class StorageService {
         }
 
         if (!error && data?.id) {
-          newMessage.id = data.id;
+          const finalId = data.id;
+          newMessage.id = finalId;
           newMessage.status = 'delivered';
-          this.saveMessages(this.getStoredMessages().map((m) => (m.id === newMessage.id ? newMessage : m)));
+          const currentList = this.getStoredMessages();
+          const targetIndex = currentList.findIndex((m) => m.id === tempId || m.id === finalId);
+          if (targetIndex >= 0) {
+            currentList[targetIndex] = {
+              ...currentList[targetIndex],
+              id: finalId,
+              status: 'delivered',
+            };
+          } else {
+            currentList.push(newMessage);
+          }
+          this.saveMessages(currentList);
         } else {
           // Fallback delivered status
           setTimeout(() => {
-            this.updateLocalStatus(newMessage.id, 'delivered');
+            this.updateLocalStatus(tempId, 'delivered');
           }, 400);
         }
       } catch (err) {
         console.warn('Supabase insert error, keeping local message:', err);
         setTimeout(() => {
-          this.updateLocalStatus(newMessage.id, 'delivered');
+          this.updateLocalStatus(tempId, 'delivered');
         }, 400);
       }
     } else {
       setTimeout(() => {
-        this.updateLocalStatus(newMessage.id, 'delivered');
+        this.updateLocalStatus(tempId, 'delivered');
       }, 400);
     }
 

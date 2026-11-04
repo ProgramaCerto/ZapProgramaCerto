@@ -33,6 +33,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
+  const [isSendingText, setIsSendingText] = useState(false);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -132,23 +133,28 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   // Send Text Message
   const handleSendText = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || isSendingText) return;
 
     const textToSend = inputText.trim();
+    setIsSendingText(true);
     setInputText('');
 
-    await storage.sendMessage({
-      chatId: chat.id,
-      senderId: currentUser.id,
-      senderHandle: currentUser.handle,
-      recipientId: chat.contact.id,
-      type: 'text',
-      text: textToSend,
-    });
+    try {
+      await storage.sendMessage({
+        chatId: chat.id,
+        senderId: currentUser.id,
+        senderHandle: currentUser.handle,
+        recipientId: chat.contact.id,
+        type: 'text',
+        text: textToSend,
+      });
 
-    setTimeout(() => {
-      scrollToBottom(true);
-    }, 50);
+      setTimeout(() => {
+        scrollToBottom(true);
+      }, 50);
+    } finally {
+      setIsSendingText(false);
+    }
   };
 
   // Live Camera Photo Captured
