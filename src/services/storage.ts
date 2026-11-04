@@ -2,53 +2,32 @@ import { User, Chat, Message } from '../types/chat';
 import { soundEffects } from '../utils/audio';
 import { getSupabaseClient } from './supabase';
 
-const INITIAL_USERS: User[] = [
-  {
-    id: 'user_ana',
-    name: 'Ana Clara',
-    handle: '@ana',
-    password: '123',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    bio: 'Designer UI/UX & Apaixonada por tecnologia',
-    online: true,
-    createdAt: '2026-01-10T10:00:00Z',
-  },
-  {
-    id: 'user_carlos',
-    name: 'Carlos Eduardo',
-    handle: '@carlos',
-    password: '123',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    bio: 'Desenvolvedor Full Stack 💻',
-    online: true,
-    createdAt: '2026-01-15T14:30:00Z',
-  },
-  {
-    id: 'user_maria',
-    name: 'Maria Silva',
-    handle: '@mariasilva',
-    password: '123',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    bio: 'Fotógrafa e amante de viagens ✈️',
-    online: true,
-    createdAt: '2026-02-01T09:15:00Z',
-  },
-];
-
 const STORAGE_KEYS = {
   USERS: 'zapprogramacerto_users_db',
   CURRENT_USER: 'zapprogramacerto_session_user',
   SAVED_CREDENTIALS: 'zapprogramacerto_saved_credentials',
+  SAVED_CONTACTS: 'zapprogramacerto_saved_contacts',
   CHATS: 'zapprogramacerto_chats_db',
   MESSAGES: 'zapprogramacerto_messages_db',
   PREFILLED_HANDLE: 'zapprogramacerto_prefilled_handle',
 };
 
+export function getConversationId(userId1: string, userId2: string): string {
+  const sorted = [userId1, userId2].sort();
+  return `chat_${sorted[0]}_${sorted[1]}`;
+}
+
+export interface SavedContact {
+  id?: string;
+  usuario_id: string;
+  contato_id: string;
+  nome_salvo: string;
+}
+
 class StorageService {
   private listeners: (() => void)[] = [];
   private syncInterval: NodeJS.Timeout | null = null;
   public isContinuousSyncActive = true;
-  private realtimeChannel: unknown = null;
 
   constructor() {
     this.initDatabase();
@@ -58,40 +37,30 @@ class StorageService {
 
   private initDatabase() {
     if (typeof window === 'undefined') return;
-    const existingUsers = localStorage.getItem(STORAGE_KEYS.USERS);
-    if (!existingUsers) {
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(INITIAL_USERS));
-    } else {
-      // Remove any previously stored @suporte user as requested
-      try {
-        const parsed = JSON.parse(existingUsers) as User[];
-        const filtered = parsed.filter((u) => u.handle !== '@suporte' && u.id !== 'user_suporte');
-        if (filtered.length !== parsed.length) {
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(filtered));
-        }
-      } catch {
-        // Safe
-      }
+    if (!localStorage.getItem(STORAGE_KEYS.USERS)) {
+      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify([]));
+    }
+    if (!localStorage.getItem(STORAGE_KEYS.CHATS)) {
+      localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify([]));
+    }
+    if (!localStorage.getItem(STORAGE_KEYS.MESSAGES)) {
+      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify([]));
+    }
+    if (!localStorage.getItem(STORAGE_KEYS.SAVED_CONTACTS)) {
+      localStorage.setItem(STORAGE_KEYS.SAVED_CONTACTS, JSON.stringify([]));
     }
 
-    const existingChats = localStorage.getItem(STORAGE_KEYS.CHATS);
-    if (!existingChats) {
-      localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify([]));
-    } else {
-      // Remove any chats with @suporte
-      try {
-        const parsedChats = JSON.parse(existingChats) as Chat[];
-        const filteredChats = parsedChats.filter((c) => !c.participants.includes('user_suporte') && c.contact?.handle !== '@suporte');
-        if (filteredChats.length !== parsedChats.length) {
-          localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify(filteredChats));
-        }
-      } catch {
-        // Safe
-      }
-    }
-    const existingMessages = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    if (!existingMessages) {
-      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify([]));
+    // Clean up any remaining legacy bot contacts or messages
+    try {
+      const msgs = this.getStoredMessages().filter(
+        (m) => !m.senderId.includes('bot') && m.senderHandle !== '@suporte'
+      );
+      localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(msgs));
+
+      const users = this.getUsers().filter((u) => u.handle !== '@suporte' && u.id !== 'user_suporte');
+      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    } catch {
+      // Safe
     }
   }
 
@@ -101,8 +70,8 @@ class StorageService {
     if (!client) return;
 
     try {
-      const channel = client
-        .channel('zapprogramacerto-realtime')
+      client
+        .channel('zapprogramacerto-realtime-live')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'mensagens' },
@@ -117,11 +86,16 @@ class StorageService {
             this.syncRemoteUsers();
           }
         )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'contatos' },
+          () => {
+            this.syncRemoteContacts();
+          }
+        )
         .subscribe();
-
-      this.realtimeChannel = channel;
     } catch (e) {
-      console.warn('Realtime setup error:', e);
+      console.warn('Realtime subscription error:', e);
     }
   }
 
@@ -150,9 +124,11 @@ class StorageService {
           ? 'delivered'
           : 'sending';
 
+      const chatId = getConversationId(row.remetente_id, row.destinatario_id);
+
       const mappedMsg: Message = {
         id: row.id,
-        chatId: `chat_${Math.min(row.remetente_id.charCodeAt(0), row.destinatario_id.charCodeAt(0))}`,
+        chatId,
         senderId: row.remetente_id,
         senderHandle: '',
         recipientId: row.destinatario_id,
@@ -165,21 +141,33 @@ class StorageService {
         timestamp: row.criado_em || new Date().toISOString(),
       };
 
+      const currentUser = this.getCurrentUser();
+
       if (existingIndex >= 0) {
         messages[existingIndex] = { ...messages[existingIndex], ...mappedMsg };
       } else {
         messages.push(mappedMsg);
-        const current = this.getCurrentUser();
-        if (current && mappedMsg.senderId !== current.id) {
+        if (currentUser && mappedMsg.recipientId === currentUser.id) {
           soundEffects.playReceiveSound();
+          // Update status to delivered in Supabase
+          if (row.status !== 'lida') {
+            const client = getSupabaseClient();
+            if (client) {
+              Promise.resolve(
+                client.from('mensagens').update({ status: 'nao_lida' }).eq('id', row.id)
+              ).catch(() => {});
+            }
+          }
         }
       }
 
       this.saveMessages(messages);
+      this.ensureUserCached(row.remetente_id);
+      this.notifyListeners();
     }
   }
 
-  // Continuous background sync (polls every 1.5s)
+  // Polling loop for background synchronization
   private startContinuousPolling() {
     if (typeof window === 'undefined') return;
     if (this.syncInterval) clearInterval(this.syncInterval);
@@ -189,7 +177,7 @@ class StorageService {
         this.syncWithSupabase();
         this.notifyListeners();
       }
-    }, 1500);
+    }, 1200);
   }
 
   private async syncWithSupabase() {
@@ -200,13 +188,17 @@ class StorageService {
       const currentUser = this.getCurrentUser();
       if (!currentUser) return;
 
-      // Sync latest messages from Supabase for current user
+      // Sync users & contacts first
+      await this.syncRemoteUsers();
+      await this.syncRemoteContacts();
+
+      // Sync latest messages for current user
       const { data: remoteMsgs, error } = await client
         .from('mensagens')
         .select('*')
         .or(`remetente_id.eq.${currentUser.id},destinatario_id.eq.${currentUser.id}`)
         .order('criado_em', { ascending: true })
-        .limit(100);
+        .limit(150);
 
       if (!error && remoteMsgs && remoteMsgs.length > 0) {
         const localMessages = this.getStoredMessages();
@@ -221,10 +213,12 @@ class StorageService {
               ? 'delivered'
               : 'sending';
 
+          const chatId = getConversationId(rm.remetente_id, rm.destinatario_id);
+
           if (idx === -1) {
             localMessages.push({
               id: rm.id,
-              chatId: `chat_${currentUser.id}_${rm.remetente_id === currentUser.id ? rm.destinatario_id : rm.remetente_id}`,
+              chatId,
               senderId: rm.remetente_id,
               senderHandle: '',
               recipientId: rm.destinatario_id,
@@ -237,6 +231,13 @@ class StorageService {
               timestamp: rm.criado_em || new Date().toISOString(),
             });
             changed = true;
+
+            // Make sure the contact user profile is cached locally
+            this.ensureUserCached(rm.remetente_id === currentUser.id ? rm.destinatario_id : rm.remetente_id);
+
+            if (rm.destinatario_id === currentUser.id) {
+              soundEffects.playReceiveSound();
+            }
           } else if (localMessages[idx].status !== mappedStatus) {
             localMessages[idx].status = mappedStatus;
             changed = true;
@@ -256,28 +257,92 @@ class StorageService {
     const client = getSupabaseClient();
     if (!client) return;
     try {
-      const { data, error } = await client.from('usuarios').select('*').limit(150);
+      const { data, error } = await client.from('usuarios').select('*').limit(200);
       if (!error && data) {
-        const currentLocal = this.getUsers();
+        const local = this.getUsers();
+        let changed = false;
+
         for (const u of data) {
-          const exists = currentLocal.find((cl) => cl.id === u.id || cl.handle.toLowerCase() === u.arroba.toLowerCase());
-          if (!exists) {
-            currentLocal.push({
-              id: u.id,
-              name: u.nome,
-              handle: u.arroba,
-              password: u.senha,
-              avatar: u.avatar_url || `https://i.pravatar.cc/150?u=${u.arroba}`,
-              bio: u.bio || 'Disponível no ZapProgramaCerto',
-              online: u.online,
-              createdAt: u.criado_em || new Date().toISOString(),
-            });
+          const idx = local.findIndex((l) => l.id === u.id);
+          const mappedUser: User = {
+            id: u.id,
+            name: u.nome,
+            handle: u.arroba,
+            password: u.senha,
+            avatar: u.avatar_url || '',
+            bio: u.bio || 'Disponível no ZapProgramaCerto',
+            online: u.online,
+            createdAt: u.criado_em || new Date().toISOString(),
+          };
+
+          if (idx === -1) {
+            local.push(mappedUser);
+            changed = true;
+          } else if (
+            local[idx].name !== mappedUser.name ||
+            local[idx].avatar !== mappedUser.avatar ||
+            local[idx].bio !== mappedUser.bio
+          ) {
+            local[idx] = { ...local[idx], ...mappedUser };
+            changed = true;
           }
         }
-        this.saveUsers(currentLocal);
+
+        if (changed) {
+          this.saveUsers(local);
+        }
       }
     } catch {
-      // Safe fallback
+      // Safe
+    }
+  }
+
+  private async syncRemoteContacts() {
+    const client = getSupabaseClient();
+    if (!client) return;
+    const currentUser = this.getCurrentUser();
+    if (!currentUser) return;
+
+    try {
+      const { data, error } = await client
+        .from('contatos')
+        .select('*')
+        .eq('usuario_id', currentUser.id);
+
+      if (!error && data) {
+        localStorage.setItem(STORAGE_KEYS.SAVED_CONTACTS, JSON.stringify(data));
+      }
+    } catch {
+      // Safe
+    }
+  }
+
+  private async ensureUserCached(userId: string) {
+    const users = this.getUsers();
+    if (users.find((u) => u.id === userId)) return;
+
+    const client = getSupabaseClient();
+    if (!client) return;
+
+    try {
+      const { data, error } = await client.from('usuarios').select('*').eq('id', userId).maybeSingle();
+      if (!error && data) {
+        const mappedUser: User = {
+          id: data.id,
+          name: data.nome,
+          handle: data.arroba,
+          password: data.senha,
+          avatar: data.avatar_url || '',
+          bio: data.bio || 'Disponível no ZapProgramaCerto',
+          online: data.online,
+          createdAt: data.criado_em || new Date().toISOString(),
+        };
+        const current = this.getUsers();
+        current.push(mappedUser);
+        this.saveUsers(current);
+      }
+    } catch {
+      // Safe
     }
   }
 
@@ -298,13 +363,13 @@ class StorageService {
     }
   }
 
-  // --- Users & Session Persistence (Keeps user logged in until explicit logout) ---
+  // --- Users & Session Persistence ---
   public getUsers(): User[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.USERS);
-      return raw ? JSON.parse(raw) : INITIAL_USERS;
+      return raw ? JSON.parse(raw) : [];
     } catch {
-      return INITIAL_USERS;
+      return [];
     }
   }
 
@@ -313,9 +378,6 @@ class StorageService {
     this.notifyListeners();
   }
 
-  /**
-   * Retrieves the persisted logged-in user so refreshing the page never logs them out!
-   */
   public getCurrentUser(): User | null {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
@@ -325,32 +387,23 @@ class StorageService {
     }
   }
 
-  /**
-   * Saves or clears the session in localStorage
-   */
   public setCurrentUser(user: User | null) {
     if (user) {
       localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
       if (user.password) {
-        localStorage.setItem(STORAGE_KEYS.SAVED_CREDENTIALS, JSON.stringify({
-          handle: user.handle,
-          password: user.password,
-        }));
+        localStorage.setItem(
+          STORAGE_KEYS.SAVED_CREDENTIALS,
+          JSON.stringify({
+            handle: user.handle,
+            password: user.password,
+          })
+        );
       }
     } else {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
       localStorage.removeItem(STORAGE_KEYS.SAVED_CREDENTIALS);
     }
     this.notifyListeners();
-  }
-
-  public getSavedCredentials(): { handle: string; password?: string } | null {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.SAVED_CREDENTIALS);
-      return raw ? JSON.parse(raw) : null;
-    } catch {
-      return null;
-    }
   }
 
   public getPrefilledHandle(): string {
@@ -365,7 +418,13 @@ class StorageService {
     localStorage.removeItem(STORAGE_KEYS.PREFILLED_HANDLE);
   }
 
-  public async register(name: string, rawHandle: string, password: string, customAvatar?: string): Promise<{ success: boolean; message?: string; user?: User }> {
+  // --- Register & Login ---
+  public async register(
+    name: string,
+    rawHandle: string,
+    password: string,
+    customAvatar?: string
+  ): Promise<{ success: boolean; message?: string; user?: User }> {
     let cleanHandle = rawHandle.trim();
     if (!cleanHandle.startsWith('@')) {
       cleanHandle = `@${cleanHandle}`;
@@ -382,28 +441,34 @@ class StorageService {
       return { success: false, message: 'A senha deve ter pelo menos 3 dígitos.' };
     }
 
-    const users = this.getUsers();
-    const existing = users.find((u) => u.handle.toLowerCase() === cleanHandle);
-    if (existing) {
-      return { success: false, message: 'Este usuário já está cadastrado. Escolha outro.' };
-    }
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data: existing } = await client
+          .from('usuarios')
+          .select('id')
+          .ilike('arroba', cleanHandle)
+          .maybeSingle();
 
-    const avatarNumber = (users.length % 70) + 1;
-    const finalAvatar = customAvatar || `https://i.pravatar.cc/150?img=${avatarNumber}`;
+        if (existing) {
+          return { success: false, message: 'Este usuário já está cadastrado. Escolha outro.' };
+        }
+      } catch {
+        // Safe
+      }
+    }
 
     const newUser: User = {
       id: `user_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       name: name.trim(),
       handle: cleanHandle,
       password,
-      avatar: finalAvatar,
+      avatar: customAvatar || '',
       bio: 'Disponível no ZapProgramaCerto',
       online: true,
       createdAt: new Date().toISOString(),
     };
 
-    // Attempt Supabase insert if client exists
-    const client = getSupabaseClient();
     if (client) {
       try {
         const { data, error } = await client
@@ -423,26 +488,28 @@ class StorageService {
           newUser.id = data.id;
         }
       } catch (e) {
-        console.warn('Supabase register fallback to local', e);
+        console.warn('Supabase register error, using generated id', e);
       }
     }
 
+    const users = this.getUsers();
     users.push(newUser);
     this.saveUsers(users);
 
     this.setPrefilledHandle(cleanHandle);
-
     return { success: true, user: newUser };
   }
 
-  public async login(rawHandle: string, password: string): Promise<{ success: boolean; message?: string; user?: User }> {
+  public async login(
+    rawHandle: string,
+    password: string
+  ): Promise<{ success: boolean; message?: string; user?: User }> {
     let cleanHandle = rawHandle.trim();
     if (!cleanHandle.startsWith('@')) {
       cleanHandle = `@${cleanHandle}`;
     }
     cleanHandle = cleanHandle.toLowerCase();
 
-    // Check Supabase first if available
     const client = getSupabaseClient();
     if (client) {
       try {
@@ -462,19 +529,17 @@ class StorageService {
             name: data.nome,
             handle: data.arroba,
             password: data.senha,
-            avatar: data.avatar_url || `https://i.pravatar.cc/150?u=${data.arroba}`,
+            avatar: data.avatar_url || '',
             bio: data.bio || 'Disponível no ZapProgramaCerto',
             online: true,
             createdAt: data.criado_em || new Date().toISOString(),
           };
 
-          // Save session permanently to localStorage so refresh keeps login!
           this.setCurrentUser(remoteUser);
           this.clearPrefilledHandle();
 
-          // Sync into local list
           const users = this.getUsers();
-          const localIdx = users.findIndex((u) => u.id === remoteUser.id || u.handle.toLowerCase() === remoteUser.handle.toLowerCase());
+          const localIdx = users.findIndex((u) => u.id === remoteUser.id);
           if (localIdx >= 0) users[localIdx] = remoteUser;
           else users.push(remoteUser);
           this.saveUsers(users);
@@ -482,23 +547,21 @@ class StorageService {
           return { success: true, user: remoteUser };
         }
       } catch (e) {
-        console.warn('Supabase login check exception, falling back to local storage', e);
+        console.warn('Supabase login check fallback', e);
       }
     }
 
-    // Local fallback check
+    // Local fallback
     const users = this.getUsers();
     const user = users.find((u) => u.handle.toLowerCase() === cleanHandle);
 
     if (!user) {
       return { success: false, message: 'Usuário não encontrado com este arroba (@).' };
     }
-
     if (user.password !== password) {
       return { success: false, message: 'Senha incorreta. Verifique e tente novamente.' };
     }
 
-    // Save session to localStorage so page refresh preserves logged-in state!
     this.setCurrentUser(user);
     this.clearPrefilledHandle();
     return { success: true, user };
@@ -528,7 +591,6 @@ class StorageService {
       this.setCurrentUser(current);
     }
 
-    // Also update remote Supabase password if client available
     const client = getSupabaseClient();
     if (client) {
       Promise.resolve(client.from('usuarios').update({ senha: newPass }).eq('id', userId)).catch(() => {});
@@ -537,7 +599,10 @@ class StorageService {
     return { success: true, message: 'Senha alterada com sucesso!' };
   }
 
-  public updateProfile(userId: string, updates: { name?: string; bio?: string; avatar?: string }): { success: boolean; user?: User } {
+  public updateProfile(
+    userId: string,
+    updates: { name?: string; bio?: string; avatar?: string }
+  ): { success: boolean; user?: User } {
     const users = this.getUsers();
     const index = users.findIndex((u) => u.id === userId);
     if (index === -1) return { success: false };
@@ -567,17 +632,107 @@ class StorageService {
     return { success: true, user: updated };
   }
 
-  // --- Search & Add Contacts ---
-  public searchUserByHandle(rawHandle: string): User | null {
+  // --- Saved Contacts Management ---
+  public getSavedContacts(): SavedContact[] {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.SAVED_CONTACTS);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  public async saveContact(
+    usuarioId: string,
+    contatoId: string,
+    nomeSalvo: string
+  ): Promise<{ success: boolean; message?: string }> {
+    const contacts = this.getSavedContacts();
+    const idx = contacts.findIndex(
+      (c) => c.usuario_id === usuarioId && c.contato_id === contatoId
+    );
+
+    if (idx >= 0) {
+      contacts[idx].nome_salvo = nomeSalvo.trim();
+    } else {
+      contacts.push({
+        usuario_id: usuarioId,
+        contato_id: contatoId,
+        nome_salvo: nomeSalvo.trim(),
+      });
+    }
+
+    localStorage.setItem(STORAGE_KEYS.SAVED_CONTACTS, JSON.stringify(contacts));
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('contatos').upsert(
+          {
+            usuario_id: usuarioId,
+            contato_id: contatoId,
+            nome_salvo: nomeSalvo.trim(),
+          },
+          { onConflict: 'usuario_id,contato_id' }
+        );
+      } catch (e) {
+        console.warn('Error saving contact to Supabase:', e);
+      }
+    }
+
+    this.notifyListeners();
+    return { success: true, message: 'Contato salvo com sucesso!' };
+  }
+
+  // Search User by Handle in Supabase
+  public async searchUserByHandle(rawHandle: string): Promise<User | null> {
     let cleanHandle = rawHandle.trim().toLowerCase();
     if (!cleanHandle.startsWith('@')) {
       cleanHandle = `@${cleanHandle}`;
     }
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client
+          .from('usuarios')
+          .select('*')
+          .ilike('arroba', cleanHandle)
+          .maybeSingle();
+
+        if (!error && data) {
+          const user: User = {
+            id: data.id,
+            name: data.nome,
+            handle: data.arroba,
+            avatar: data.avatar_url || '',
+            bio: data.bio || '',
+            online: data.online,
+            createdAt: data.criado_em || new Date().toISOString(),
+          };
+          const users = this.getUsers();
+          const idx = users.findIndex((u) => u.id === user.id);
+          if (idx >= 0) users[idx] = user;
+          else users.push(user);
+          this.saveUsers(users);
+
+          return user;
+        }
+      } catch {
+        // Safe
+      }
+    }
+
     const users = this.getUsers();
     return users.find((u) => u.handle.toLowerCase() === cleanHandle) || null;
   }
 
-  public addContact(currentUserId: string, rawHandle: string, nameFallback?: string): { success: boolean; message?: string; chat?: Chat } {
+  // Add Contact action from user
+  public async addContact(
+    currentUserId: string,
+    rawHandle: string,
+    nomeSalvo: string
+  ): Promise<{ success: boolean; message?: string; chat?: Chat }> {
     let cleanHandle = rawHandle.trim().toLowerCase();
     if (!cleanHandle.startsWith('@')) {
       cleanHandle = `@${cleanHandle}`;
@@ -590,116 +745,33 @@ class StorageService {
       return { success: false, message: 'Você não pode adicionar seu próprio usuário.' };
     }
 
-    let foundUser = this.searchUserByHandle(cleanHandle);
-
-    if (!foundUser) {
-      if (!nameFallback || !nameFallback.trim()) {
-        return { success: false, message: `O contato ${cleanHandle} não foi encontrado. Informe o nome da pessoa.` };
-      }
-      const users = this.getUsers();
-      foundUser = {
-        id: `user_contact_${Date.now()}`,
-        name: nameFallback.trim(),
-        handle: cleanHandle,
-        password: '123',
-        avatar: `https://i.pravatar.cc/150?u=${cleanHandle}`,
-        bio: 'Novo contato no ZapProgramaCerto',
-        online: true,
-        createdAt: new Date().toISOString(),
+    const targetUser = await this.searchUserByHandle(cleanHandle);
+    if (!targetUser) {
+      return {
+        success: false,
+        message: `Nenhum usuário foi encontrado com o arroba ${cleanHandle}. Verifique e tente novamente.`,
       };
-      users.push(foundUser);
-      this.saveUsers(users);
-
-      // Insert into Supabase if possible
-      const client = getSupabaseClient();
-      if (client) {
-        Promise.resolve(
-          client.from('usuarios').insert({
-            nome: foundUser.name,
-            arroba: foundUser.handle,
-            senha: '123',
-            avatar_url: foundUser.avatar,
-            bio: foundUser.bio,
-            online: true,
-          })
-        ).catch(() => {});
-      }
     }
 
-    // Insert into Supabase contatos
-    const client = getSupabaseClient();
-    if (client) {
-      Promise.resolve(
-        client.from('contatos').insert({
-          usuario_id: currentUserId,
-          contato_id: foundUser.id,
-          nome_salvo: nameFallback || foundUser.name,
-        })
-      ).catch(() => {});
-    }
+    // Save contact relation
+    await this.saveContact(currentUserId, targetUser.id, nomeSalvo.trim() || targetUser.name);
 
-    const chats = this.getStoredChats();
-    let existingChat = chats.find(
-      (c) => c.participants.includes(currentUserId) && c.participants.includes(foundUser!.id)
-    );
-
-    if (existingChat) {
-      existingChat.contact = foundUser;
-      return { success: true, message: 'Conversa já existe!', chat: existingChat };
-    }
-
-    const newChatId = `chat_${currentUserId}_${foundUser.id}`;
+    const chatId = getConversationId(currentUserId, targetUser.id);
     const newChat: Chat = {
-      id: newChatId,
-      participants: [currentUserId, foundUser.id],
-      contact: foundUser,
+      id: chatId,
+      participants: [currentUserId, targetUser.id],
+      contact: { ...targetUser, name: nomeSalvo.trim() || targetUser.name },
+      isSaved: true,
       unreadCount: 0,
       updatedAt: new Date().toISOString(),
     };
 
-    chats.unshift(newChat);
-    this.saveChats(chats);
     this.notifyListeners();
-
-    return { success: true, message: 'Contato adicionado com sucesso!', chat: newChat };
+    return { success: true, message: 'Contato adicionado!', chat: newChat };
   }
 
-  // --- Chats & Messages ---
-  private getStoredChats(): Chat[] {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.CHATS);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  private saveChats(chats: Chat[]) {
-    localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify(chats));
-    this.notifyListeners();
-  }
-
-  public getUserChats(userId: string): Chat[] {
-    const chats = this.getStoredChats();
-    const userChats = chats.filter((c) => c.participants.includes(userId));
-    const allUsers = this.getUsers();
-
-    return userChats
-      .map((c) => {
-        const contactId = c.participants.find((id) => id !== userId) || c.participants[0];
-        const contactUser = allUsers.find((u) => u.id === contactId) || c.contact;
-        const messages = this.getChatMessages(c.id);
-        const lastMessage = messages.length > 0 ? messages[messages.length - 1] : c.lastMessage;
-        return {
-          ...c,
-          contact: contactUser,
-          lastMessage,
-        };
-      })
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  }
-
-  private getStoredMessages(): Message[] {
+  // --- Realtime Chats & Messages between humans ---
+  public getStoredMessages(): Message[] {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.MESSAGES);
       return raw ? JSON.parse(raw) : [];
@@ -708,7 +780,7 @@ class StorageService {
     }
   }
 
-  private saveMessages(messages: Message[]) {
+  public saveMessages(messages: Message[]) {
     localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages));
     this.notifyListeners();
   }
@@ -718,33 +790,141 @@ class StorageService {
     return messages.filter((m) => m.chatId === chatId);
   }
 
-  public markMessagesAsRead(chatId: string, currentUserId: string) {
+  /**
+   * Builds the real list of conversations dynamically from messages and saved contacts
+   */
+  public getUserChats(userId: string): Chat[] {
     const messages = this.getStoredMessages();
-    let updated = false;
-    for (const msg of messages) {
-      if (msg.chatId === chatId && msg.senderId !== currentUserId && msg.status !== 'read') {
-        msg.status = 'read';
-        updated = true;
+    const allUsers = this.getUsers();
+    const savedContacts = this.getSavedContacts();
 
-        // Update in Supabase
-        const client = getSupabaseClient();
-        if (client) {
-          Promise.resolve(client.from('mensagens').update({ status: 'lida' }).eq('id', msg.id)).catch(() => {});
+    // Map of partnerId -> Chat
+    const chatMap = new Map<string, Chat>();
+
+    // 1. Process all contacts saved by current user
+    for (const sc of savedContacts) {
+      if (sc.usuario_id === userId) {
+        const partner = allUsers.find((u) => u.id === sc.contato_id) || {
+          id: sc.contato_id,
+          name: sc.nome_salvo,
+          handle: '',
+          avatar: '',
+          createdAt: new Date().toISOString(),
+        };
+
+        const chatId = getConversationId(userId, sc.contato_id);
+        chatMap.set(sc.contato_id, {
+          id: chatId,
+          participants: [userId, sc.contato_id],
+          contact: { ...partner, name: sc.nome_salvo },
+          isSaved: true,
+          unreadCount: 0,
+          updatedAt: new Date(0).toISOString(),
+        });
+      }
+    }
+
+    // 2. Process all messages to/from current user
+    for (const msg of messages) {
+      const isSender = msg.senderId === userId;
+      const partnerId = isSender ? msg.recipientId : msg.senderId;
+
+      if (!partnerId || partnerId === userId) continue;
+
+      const chatId = getConversationId(userId, partnerId);
+      const isSaved = savedContacts.some(
+        (sc) => sc.usuario_id === userId && sc.contato_id === partnerId
+      );
+      const savedRelation = savedContacts.find(
+        (sc) => sc.usuario_id === userId && sc.contato_id === partnerId
+      );
+
+      const partnerUser = allUsers.find((u) => u.id === partnerId) || {
+        id: partnerId,
+        name: partnerId,
+        handle: '',
+        avatar: '',
+        createdAt: new Date().toISOString(),
+      };
+
+      const displayName = isSaved && savedRelation
+        ? savedRelation.nome_salvo
+        : partnerUser.handle || partnerUser.name || 'Contato';
+
+      const existingChat = chatMap.get(partnerId);
+
+      const unreadIncrement =
+        msg.recipientId === userId && msg.status !== 'read' ? 1 : 0;
+
+      if (!existingChat) {
+        chatMap.set(partnerId, {
+          id: chatId,
+          participants: [userId, partnerId],
+          contact: { ...partnerUser, name: displayName },
+          isSaved,
+          lastMessage: msg,
+          unreadCount: unreadIncrement,
+          updatedAt: msg.timestamp,
+        });
+      } else {
+        const isNewer =
+          new Date(msg.timestamp).getTime() >
+          new Date(existingChat.updatedAt).getTime();
+
+        existingChat.isSaved = isSaved;
+        if (isSaved && savedRelation) {
+          existingChat.contact.name = savedRelation.nome_salvo;
+        }
+
+        if (isNewer || !existingChat.lastMessage) {
+          existingChat.lastMessage = msg;
+          existingChat.updatedAt = msg.timestamp;
+        }
+        if (msg.recipientId === userId && msg.status !== 'read') {
+          existingChat.unreadCount = (existingChat.unreadCount || 0) + 1;
         }
       }
     }
+
+    return Array.from(chatMap.values()).sort(
+      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    );
+  }
+
+  public markMessagesAsRead(chatId: string, currentUserId: string) {
+    const messages = this.getStoredMessages();
+    let updated = false;
+    const readMsgIds: string[] = [];
+
+    for (const msg of messages) {
+      if (
+        msg.chatId === chatId &&
+        msg.senderId !== currentUserId &&
+        msg.status !== 'read'
+      ) {
+        msg.status = 'read';
+        readMsgIds.push(msg.id);
+        updated = true;
+      }
+    }
+
     if (updated) {
       this.saveMessages(messages);
-      const chats = this.getStoredChats();
-      const chat = chats.find((c) => c.id === chatId);
-      if (chat) {
-        chat.unreadCount = 0;
-        this.saveChats(chats);
+
+      const client = getSupabaseClient();
+      if (client && readMsgIds.length > 0) {
+        Promise.resolve(
+          client.from('mensagens').update({ status: 'lida' }).in('id', readMsgIds)
+        ).catch(() => {});
       }
     }
   }
 
-  public sendMessage(params: {
+  /**
+   * Real message sender: sends message to Supabase and saves locally.
+   * ZERO AI / BOT RESPONDERS!
+   */
+  public async sendMessage(params: {
     chatId: string;
     senderId: string;
     senderHandle: string;
@@ -754,46 +934,43 @@ class StorageService {
     mediaUrl?: string;
     photosAttached?: string;
     audioDuration?: number;
-  }): Message {
-    const messages = this.getStoredMessages();
-    const chats = this.getStoredChats();
-    const currentChat = chats.find((c) => c.id === params.chatId);
+  }): Promise<Message> {
     const resolvedRecipientId =
       params.recipientId ||
-      (currentChat ? currentChat.participants.find((p) => p !== params.senderId) : undefined);
+      params.chatId.replace('chat_', '').split('_').find((id) => id !== params.senderId);
+
+    const stableChatId = resolvedRecipientId
+      ? getConversationId(params.senderId, resolvedRecipientId)
+      : params.chatId;
 
     const newMessage: Message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      chatId: params.chatId,
+      chatId: stableChatId,
       senderId: params.senderId,
       senderHandle: params.senderHandle,
       recipientId: resolvedRecipientId,
       type: params.type,
       text: params.text,
       mediaUrl: params.mediaUrl,
-      photosAttached: params.photosAttached || (params.type === 'image' && params.mediaUrl ? params.mediaUrl : undefined),
+      photosAttached:
+        params.photosAttached ||
+        (params.type === 'image' && params.mediaUrl ? params.mediaUrl : undefined),
       audioDuration: params.audioDuration,
       timestamp: new Date().toISOString(),
-      status: 'sending', // Inicia sem bolinha (não chegou)
+      status: 'sending',
     };
 
+    const messages = this.getStoredMessages();
     messages.push(newMessage);
     this.saveMessages(messages);
 
     soundEffects.playSendSound();
 
-    const chatIndex = chats.findIndex((c) => c.id === params.chatId);
-    if (chatIndex !== -1) {
-      chats[chatIndex].lastMessage = newMessage;
-      chats[chatIndex].updatedAt = newMessage.timestamp;
-      this.saveChats(chats);
-    }
-
-    // Insert into Supabase mensagens table
+    // Insert into real Supabase database!
     const client = getSupabaseClient();
     if (client && resolvedRecipientId) {
-      Promise.resolve(
-        client
+      try {
+        const { data, error } = await client
           .from('mensagens')
           .insert({
             remetente_id: params.senderId,
@@ -805,118 +982,51 @@ class StorageService {
             audio_duracao: params.audioDuration || 0,
             status: 'nao_lida',
           })
-      ).catch(() => {});
+          .select()
+          .maybeSingle();
+
+        if (!error && data?.id) {
+          newMessage.id = data.id;
+          newMessage.status = 'delivered';
+          this.saveMessages(this.getStoredMessages().map((m) => (m.id === newMessage.id ? newMessage : m)));
+        } else {
+          // Fallback delivered status
+          setTimeout(() => {
+            this.updateLocalStatus(newMessage.id, 'delivered');
+          }, 400);
+        }
+      } catch (err) {
+        console.warn('Supabase insert error, keeping local message:', err);
+        setTimeout(() => {
+          this.updateLocalStatus(newMessage.id, 'delivered');
+        }, 400);
+      }
+    } else {
+      setTimeout(() => {
+        this.updateLocalStatus(newMessage.id, 'delivered');
+      }, 400);
     }
-
-    // Step 1: Bolinha aparece (chegou no celular da pessoa)
-    setTimeout(() => {
-      this.updateMessageStatus(newMessage.id, 'delivered');
-    }, 600);
-
-    // Step 2: Bolinha fica azul (a pessoa viu a mensagem)
-    setTimeout(() => {
-      this.updateMessageStatus(newMessage.id, 'read');
-    }, 1600);
-
-    this.handleAutoResponder(params.chatId, params.senderId, newMessage);
 
     return newMessage;
   }
 
-  private updateMessageStatus(messageId: string, status: 'delivered' | 'read') {
+  private updateLocalStatus(messageId: string, status: 'delivered' | 'read') {
     const messages = this.getStoredMessages();
     const msg = messages.find((m) => m.id === messageId);
     if (msg && msg.status !== 'read') {
       msg.status = status;
       this.saveMessages(messages);
-
-      const client = getSupabaseClient();
-      if (client) {
-        Promise.resolve(
-          client
-            .from('mensagens')
-            .update({ status: status === 'read' ? 'lida' : 'nao_lida' })
-            .eq('id', messageId)
-        ).catch(() => {});
-      }
-    }
-  }
-
-  private handleAutoResponder(chatId: string, senderId: string, userMessage: Message) {
-    const chats = this.getStoredChats();
-    const chat = chats.find((c) => c.id === chatId);
-    if (!chat) return;
-
-    const contactId = chat.participants.find((id) => id !== senderId);
-    if (!contactId) return;
-
-    const contact = this.getUsers().find((u) => u.id === contactId);
-    if (!contact) return;
-
-    setTimeout(() => {
-      this.setChatActivity(chatId, { isTyping: true, isRecordingAudio: false });
-    }, 1100);
-
-    setTimeout(() => {
-      this.setChatActivity(chatId, { isTyping: false, isRecordingAudio: false });
-
-      let replyText = 'Muito legal! Recebi sua mensagem perfeitamente aqui no ZapProgramaCerto 💙.';
-      if (userMessage.type === 'audio') {
-        replyText = `Acabei de escutar seu áudio (${userMessage.audioDuration ? Math.round(userMessage.audioDuration) + 's' : ''})! O som está ótimo. 🎧`;
-      } else if (userMessage.type === 'image') {
-        replyText = 'Adorei a foto tirada na hora! A imagem chegou com excelente definição.';
-      } else if (userMessage.text) {
-        const lower = userMessage.text.toLowerCase();
-        if (lower.includes('oi') || lower.includes('olá') || lower.includes('ola')) {
-          replyText = `Olá! Tudo bem? Que bom falar com você pelo ZapProgramaCerto!`;
-        } else if (lower.includes('supabase') || lower.includes('banco') || lower.includes('api')) {
-          replyText = 'A sincronização contínua com o Supabase está ativa e monitorando em tempo real!';
-        } else {
-          replyText = `Entendido! "${userMessage.text.slice(0, 30)}..." - Sincronizado continuamente!`;
-        }
-      }
-
-      const replyMsg: Message = {
-        id: `msg_bot_${Date.now()}`,
-        chatId,
-        senderId: contact.id,
-        senderHandle: contact.handle,
-        recipientId: senderId,
-        type: 'text',
-        text: replyText,
-        timestamp: new Date().toISOString(),
-        status: 'read',
-      };
-
-      const messages = this.getStoredMessages();
-      messages.push(replyMsg);
-      this.saveMessages(messages);
-
-      soundEffects.playReceiveSound();
-
-      const updatedChats = this.getStoredChats();
-      const currentChat = updatedChats.find((c) => c.id === chatId);
-      if (currentChat) {
-        currentChat.lastMessage = replyMsg;
-        currentChat.updatedAt = replyMsg.timestamp;
-        this.saveChats(updatedChats);
-      }
-    }, 3000);
-  }
-
-  private setChatActivity(chatId: string, activity: { isTyping?: boolean; isRecordingAudio?: boolean }) {
-    const chats = this.getStoredChats();
-    const chat = chats.find((c) => c.id === chatId);
-    if (chat) {
-      chat.isTyping = activity.isTyping;
-      chat.isRecordingAudio = activity.isRecordingAudio;
-      this.saveChats(chats);
     }
   }
 
   public deleteMessage(messageId: string) {
     const messages = this.getStoredMessages().filter((m) => m.id !== messageId);
     this.saveMessages(messages);
+
+    const client = getSupabaseClient();
+    if (client) {
+      Promise.resolve(client.from('mensagens').delete().eq('id', messageId)).catch(() => {});
+    }
   }
 }
 

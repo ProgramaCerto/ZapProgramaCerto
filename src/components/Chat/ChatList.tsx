@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { UserPlus, MoreVertical, Search, Mic, Image as ImageIcon, Check, CheckCheck, Settings, LogOut, Radio } from 'lucide-react';
+import { UserPlus, MoreVertical, Search, Mic, Image as ImageIcon, Settings, LogOut, Radio, User as UserIcon } from 'lucide-react';
 import { Chat, User } from '../../types/chat';
 
 interface ChatListProps {
@@ -63,12 +63,18 @@ export const ChatList: React.FC<ChatListProps> = ({
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-white">
         <div className="flex items-center gap-3">
           <div className="relative">
-            <img
-              src={currentUser.avatar}
-              alt={currentUser.name}
-              className="w-10 h-10 rounded-full object-cover border border-slate-200"
-              referrerPolicy="no-referrer"
-            />
+            {currentUser.avatar ? (
+              <img
+                src={currentUser.avatar}
+                alt={currentUser.name}
+                className="w-10 h-10 rounded-full object-cover border border-slate-200"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
+                <UserIcon className="w-5 h-5" />
+              </div>
+            )}
             <span className="absolute bottom-0 right-0 w-3 h-3 bg-blue-500 border-2 border-white rounded-full"></span>
           </div>
           <div>
@@ -209,12 +215,18 @@ export const ChatList: React.FC<ChatListProps> = ({
               >
                 {/* Avatar with online indicator */}
                 <div className="relative shrink-0">
-                  <img
-                    src={chat.contact.avatar}
-                    alt={chat.contact.name}
-                    className="w-12 h-12 rounded-full object-cover border border-slate-200"
-                    referrerPolicy="no-referrer"
-                  />
+                  {chat.contact.avatar ? (
+                    <img
+                      src={chat.contact.avatar}
+                      alt={chat.contact.name}
+                      className="w-12 h-12 rounded-full object-cover border border-slate-200"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-12 h-12 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
+                      <UserIcon className="w-6 h-6" />
+                    </div>
+                  )}
                   {chat.contact.online && (
                     <span className="absolute bottom-0 right-0 w-3 h-3 bg-blue-500 border-2 border-white rounded-full"></span>
                   )}

@@ -10,8 +10,11 @@ import {
   Phone,
   Video,
   Download,
+  UserPlus,
+  Check,
+  User,
 } from 'lucide-react';
-import { Chat, Message, User } from '../../types/chat';
+import { Chat, Message, User as UserType } from '../../types/chat';
 import { storage } from '../../services/storage';
 import { AudioMessagePlayer } from './AudioMessagePlayer';
 import { CameraCaptureModal } from './CameraCaptureModal';
@@ -19,9 +22,9 @@ import { formatDuration, generateSyntheticAudioBlob } from '../../utils/audio';
 
 interface ChatAreaProps {
   chat: Chat;
-  currentUser: User;
+  currentUser: UserType;
   onBack: () => void;
-  onOpenContactInfo?: (contact: User) => void;
+  onOpenContactInfo?: (contact: UserType) => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -36,6 +39,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Unsaved Contact state
+  const [isContactSaved, setIsContactSaved] = useState<boolean>(chat.isSaved !== false);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
+  const [saveNameInput, setSaveNameInput] = useState<string>(
+    chat.contact.name && chat.contact.name !== chat.contact.handle ? chat.contact.name : ''
+  );
+  const [isSaving, setIsSaving] = useState(false);
+
   // Audio Recording State
   const [isRecording, setIsRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -47,6 +58,14 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const prevMessagesCountRef = useRef<number>(0);
   const isInitialLoadRef = useRef<boolean>(true);
+
+  // Keep isContactSaved updated when chat prop changes
+  useEffect(() => {
+    setIsContactSaved(chat.isSaved !== false);
+    setSaveNameInput(
+      chat.contact.name && chat.contact.name !== chat.contact.handle ? chat.contact.name : ''
+    );
+  }, [chat.id, chat.isSaved, chat.contact.name]);
 
   // Load and subscribe to messages
   const loadMessages = () => {
@@ -73,9 +92,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     };
   }, [chat.id]);
 
-  // SMART SCROLL FIX:
-  // Only scroll down when new messages are added or on first load.
-  // When user is scrolling up to read old messages, DO NOT force scroll down on recurring poll intervals!
+  // Scroll logic: only scrolls when new messages appear or on initial load
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -87,9 +104,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       return;
     }
 
-    // If new message was appended
     if (messages.length > prevMessagesCountRef.current) {
-      // Check if user was already near bottom before scrolling
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 250;
       if (isNearBottom) {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -98,29 +113,45 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     }
   }, [messages]);
 
+  // Handle Save Unsaved Contact
+  const handleConfirmSaveContact = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalName = saveNameInput.trim() || chat.contact.handle || 'Contato';
+    setIsSaving(true);
+
+    await storage.saveContact(currentUser.id, chat.contact.id, finalName);
+    chat.isSaved = true;
+    chat.contact.name = finalName;
+    setIsContactSaved(true);
+    setIsSaveModalOpen(false);
+    setIsSaving(false);
+  };
+
   // Send Text Message
-  const handleSendText = (e?: React.FormEvent) => {
+  const handleSendText = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!inputText.trim()) return;
 
-    storage.sendMessage({
+    const textToSend = inputText.trim();
+    setInputText('');
+
+    await storage.sendMessage({
       chatId: chat.id,
       senderId: currentUser.id,
       senderHandle: currentUser.handle,
       recipientId: chat.contact.id,
       type: 'text',
-      text: inputText.trim(),
+      text: textToSend,
     });
 
-    setInputText('');
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, 50);
   };
 
   // Live Camera Photo Captured
-  const handleCameraPhotoCaptured = (photoBase64: string) => {
-    storage.sendMessage({
+  const handleCameraPhotoCaptured = async (photoBase64: string) => {
+    await storage.sendMessage({
       chatId: chat.id,
       senderId: currentUser.id,
       senderHandle: currentUser.handle,
@@ -142,9 +173,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const base64 = reader.result as string;
-      storage.sendMessage({
+      await storage.sendMessage({
         chatId: chat.id,
         senderId: currentUser.id,
         senderHandle: currentUser.handle,
@@ -229,9 +260,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       mediaRecorderRef.current.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const reader = new FileReader();
-        reader.onloadend = () => {
+        reader.onloadend = async () => {
           const base64Audio = reader.result as string;
-          storage.sendMessage({
+          await storage.sendMessage({
             chatId: chat.id,
             senderId: currentUser.id,
             senderHandle: currentUser.handle,
@@ -247,9 +278,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     } else {
       const { blob } = await generateSyntheticAudioBlob(finalDuration);
       const reader = new FileReader();
-      reader.onloadend = () => {
+      reader.onloadend = async () => {
         const base64Audio = reader.result as string;
-        storage.sendMessage({
+        await storage.sendMessage({
           chatId: chat.id,
           senderId: currentUser.id,
           senderHandle: currentUser.handle,
@@ -294,12 +325,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             className="flex items-center gap-3 cursor-pointer group"
           >
             <div className="relative">
-              <img
-                src={chat.contact.avatar}
-                alt={chat.contact.name}
-                className="w-10 h-10 rounded-full object-cover border border-slate-200"
-                referrerPolicy="no-referrer"
-              />
+              {chat.contact.avatar ? (
+                <img
+                  src={chat.contact.avatar}
+                  alt={chat.contact.name}
+                  className="w-10 h-10 rounded-full object-cover border border-slate-200"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
+                  <User className="w-5 h-5" />
+                </div>
+              )}
               {chat.contact.online && (
                 <span className="absolute bottom-0 right-0 w-3 h-3 bg-blue-500 border-2 border-white rounded-full"></span>
               )}
@@ -312,16 +349,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <div className="text-xs text-slate-500 flex items-center gap-1.5">
                 <span className="text-blue-600 font-medium">{chat.contact.handle}</span>
                 <span className="text-slate-300">·</span>
-                {chat.isTyping ? (
-                  <span className="text-blue-600 font-semibold italic animate-pulse">
-                    digitando...
-                  </span>
-                ) : chat.isRecordingAudio ? (
-                  <span className="text-blue-600 font-semibold italic flex items-center gap-1">
-                    <Mic className="w-3 h-3 animate-pulse text-blue-600" />
-                    gravando áudio...
-                  </span>
-                ) : chat.contact.online ? (
+                {chat.contact.online ? (
                   <span className="text-slate-500">online</span>
                 ) : (
                   <span className="text-slate-400">offline</span>
@@ -351,6 +379,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </button>
         </div>
       </div>
+
+      {/* UNSAVED CONTACT BANNER (Exatamente como solicitado pelo usuário) */}
+      {!isContactSaved && (
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-2.5 shrink-0 z-10 shadow-xs">
+          <div className="flex items-center gap-2 text-xs text-blue-900">
+            <UserPlus className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>
+              Este contato não está salvo na sua agenda ({chat.contact.handle || chat.contact.name}).
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsSaveModalOpen(true)}
+            className="w-full sm:w-auto px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <UserPlus className="w-3.5 h-3.5" />
+            <span>Salvar Contato</span>
+          </button>
+        </div>
+      )}
 
       {/* Messages Scroll View (With fixed non-jumping scroll!) */}
       <div
@@ -432,16 +480,13 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {isOutgoing && (
                     <div className="flex items-center justify-center pl-0.5">
                       {msg.status === 'sending' ? (
-                        /* Nenhuma bolinha aparece quando a mensagem não chegou */
                         null
                       ) : msg.status === 'delivered' ? (
-                        /* Bolinha apareceu, mas NÃO está azul: chegou/tocou no celular da pessoa */
                         <span
                           title="Mensagem tocou no celular da pessoa"
                           className="w-2 h-2 rounded-full bg-white/70 border border-white/90 shrink-0 inline-block"
                         />
                       ) : (
-                        /* Bolinha ficou AZUL: a pessoa viu a mensagem */
                         <span
                           title="A pessoa viu a mensagem"
                           className="w-2 h-2 rounded-full bg-cyan-300 ring-1 ring-white/90 shadow-xs shrink-0 inline-block"
@@ -454,17 +499,6 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             </div>
           );
         })}
-
-        {/* Live typing indicator bubble */}
-        {chat.isTyping && (
-          <div className="flex items-start">
-            <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-xs px-4 py-2.5 shadow-xs flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce"></span>
-              <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce [animation-delay:0.2s]"></span>
-              <span className="w-2 h-2 rounded-full bg-blue-500 animate-bounce [animation-delay:0.4s]"></span>
-            </div>
-          </div>
-        )}
 
         <div ref={messagesEndRef} />
       </div>
@@ -575,6 +609,73 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         )}
       </div>
 
+      {/* Modal para Salvar Contato com Nome */}
+      {isSaveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-sm w-full p-5 space-y-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <UserPlus className="w-5 h-5 text-blue-600" />
+                <h3 className="text-sm font-bold text-slate-900">Salvar Contato</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSaveModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmSaveContact} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Arroba da Pessoa
+                </label>
+                <input
+                  type="text"
+                  value={chat.contact.handle}
+                  disabled
+                  className="w-full px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs text-slate-500 font-medium cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+                  Nome para Salvar
+                </label>
+                <input
+                  type="text"
+                  value={saveNameInput}
+                  onChange={(e) => setSaveNameInput(e.target.value)}
+                  placeholder="Ex: Carlos Amigo"
+                  autoFocus
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSaveModalOpen(false)}
+                  className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-70"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isSaving ? 'Salvando...' : 'Salvar Contato'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Live Camera Modal for snapping photos */}
       <CameraCaptureModal
         isOpen={isCameraOpen}
@@ -589,7 +690,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
               <a
                 href={fullscreenImage}
-                download="azulchat-imagem.jpg"
+                download="zapprogramacerto-imagem.jpg"
                 className="p-2.5 bg-white/20 hover:bg-white/30 text-white rounded-full transition cursor-pointer"
                 title="Baixar imagem"
               >

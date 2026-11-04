@@ -42,16 +42,13 @@ export const NewContactPanel: React.FC<NewContactPanelProps> = ({
     }
 
     setIsSearching(true);
-    setTimeout(() => {
-      // Normalize handle if user didn't type @
-      let clean = handle.trim();
-      if (!clean.startsWith('@')) {
-        clean = `@${clean}`;
-      }
+    let clean = handle.trim();
+    if (!clean.startsWith('@')) {
+      clean = `@${clean}`;
+    }
 
-      const result = storage.addContact(currentUser.id, clean, name.trim());
+    storage.addContact(currentUser.id, clean, name.trim()).then((result) => {
       setIsSearching(false);
-
       if (result.success && result.chat) {
         setSuccessMsg('Contato adicionado com sucesso!');
         setTimeout(() => {
@@ -60,7 +57,10 @@ export const NewContactPanel: React.FC<NewContactPanelProps> = ({
       } else {
         setError(result.message || 'Não foi possível adicionar o contato.');
       }
-    }, 250);
+    }).catch(() => {
+      setIsSearching(false);
+      setError('Erro de conexão ao adicionar contato.');
+    });
   };
 
   return (

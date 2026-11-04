@@ -31,6 +31,7 @@ export interface Chat {
   id: string;
   participants: string[]; // user IDs
   contact: User;
+  isSaved?: boolean;
   lastMessage?: Message;
   unreadCount: number;
   updatedAt: string;
