@@ -114,11 +114,11 @@ export default function App() {
   const selectedChat = chats.find((c) => c.id === selectedChatId);
 
   return (
-    <div className="flex h-screen w-screen bg-slate-100 overflow-hidden font-sans">
+    <div className="fixed inset-0 flex h-full h-[100dvh] w-full bg-slate-100 overflow-hidden font-sans select-none">
       <div className="flex w-full h-full bg-white shadow-2xl overflow-hidden relative">
         {/* Left Side: WhatsApp Web style in-panel views (No modal overlays!) */}
         <div
-          className={`w-full md:w-80 lg:w-96 h-full flex-col shrink-0 border-r border-slate-200 ${
+          className={`w-full md:w-80 lg:w-96 h-full min-h-0 flex-col shrink-0 border-r border-slate-200 overflow-hidden ${
             selectedChatId ? 'hidden md:flex' : 'flex'
           }`}
         >
@@ -155,7 +155,7 @@ export default function App() {
 
         {/* Right Side: Conversation Area or Desktop Empty State */}
         <div
-          className={`flex-1 h-full flex flex-col bg-[#F4F7FB] ${
+          className={`flex-1 h-full min-h-0 flex flex-col bg-[#F4F7FB] overflow-hidden relative ${
             !selectedChatId ? 'hidden md:flex' : 'flex'
           }`}
         >

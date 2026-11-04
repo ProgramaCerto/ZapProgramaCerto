@@ -67,6 +67,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   useEffect(() => {
+    window.scrollTo(0, 0);
     isInitialLoadRef.current = true;
     prevMessagesCountRef.current = 0;
     loadMessages();
@@ -80,13 +81,26 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     };
   }, [chat.id]);
 
-  // Scroll logic: only scrolls when new messages appear or on initial load
+  // Scroll logic: strictly scrolls the messages container so the header and footer remain fixed
+  const scrollToBottom = (smooth = false) => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    if (smooth) {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: 'smooth',
+      });
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
+  };
+
   useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
 
     if (isInitialLoadRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'instant' });
+      scrollToBottom(false);
       isInitialLoadRef.current = false;
       prevMessagesCountRef.current = messages.length;
       return;
@@ -95,7 +109,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     if (messages.length > prevMessagesCountRef.current) {
       const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 250;
       if (isNearBottom) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        scrollToBottom(true);
       }
       prevMessagesCountRef.current = messages.length;
     }
@@ -133,7 +147,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     });
 
     setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      scrollToBottom(true);
     }, 50);
   };
 
@@ -156,7 +170,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       });
 
       setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        scrollToBottom(true);
       }, 50);
     } catch (err) {
       console.error('Erro ao enviar foto da câmera:', err);
@@ -187,7 +201,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       });
 
       setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        scrollToBottom(true);
       }, 50);
     } catch (err) {
       console.error('Falha ao processar e enviar foto da galeria:', err);
@@ -205,9 +219,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#F4F7FB] relative overflow-hidden select-text">
-      {/* Chat Top Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-slate-200 z-10 shrink-0 shadow-xs">
+    <div className="flex flex-col h-full min-h-0 w-full bg-[#F4F7FB] relative overflow-hidden select-text">
+      {/* Chat Top Header - FIXO no topo, nunca se desloca */}
+      <header className="sticky top-0 z-30 flex items-center justify-between px-4 py-3 bg-white border-b border-slate-200 shrink-0 shadow-xs">
         <div className="flex items-center gap-3">
           {/* Back button for mobile view */}
           <button
@@ -277,11 +291,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <Video className="w-4 h-4" />
           </button>
         </div>
-      </div>
+      </header>
 
       {/* UNSAVED CONTACT BANNER (Exatamente como solicitado pelo usuário) */}
       {!isContactSaved && (
-        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-2.5 shrink-0 z-10 shadow-xs">
+        <div className="bg-blue-50 border-b border-blue-200 px-4 py-2.5 flex flex-col sm:flex-row items-center justify-between gap-2.5 shrink-0 z-20 shadow-xs">
           <div className="flex items-center gap-2 text-xs text-blue-900">
             <UserPlus className="w-4 h-4 text-blue-600 shrink-0" />
             <span>
@@ -299,10 +313,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         </div>
       )}
 
-      {/* Messages Scroll View (With fixed non-jumping scroll!) */}
+      {/* Messages Scroll View (Área exclusiva com rolagem interna independente, mantendo cabeçalho e rodapé fixos) */}
       <div
         ref={messagesContainerRef}
-        className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-3.5"
+        className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-3.5"
       >
         {/* Intro banner */}
         <div className="text-center my-4">
@@ -394,8 +408,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Footer (White and Blue palette) */}
-      <div className="p-3 sm:p-4 bg-white border-t border-slate-200 z-10 shrink-0">
+      {/* Input Footer (FIXO na base, idêntico ao WhatsApp) */}
+      <footer className="sticky bottom-0 z-30 p-3 sm:p-4 bg-white border-t border-slate-200 shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         {/* Status de envio de foto para o Banco de Fotos */}
         {isUploadingPhoto && (
           <div className="flex items-center gap-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-3 py-1.5 rounded-xl mb-2.5 animate-in fade-in duration-150">
@@ -445,6 +459,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              onFocus={() => {
+                window.scrollTo(0, 0);
+                setTimeout(() => scrollToBottom(true), 120);
+              }}
               placeholder="Digite uma mensagem..."
               className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
             />
@@ -464,7 +482,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <Send className="w-5 h-5" />
           </button>
         </form>
-      </div>
+      </footer>
 
       {/* Modal para Salvar Contato com Nome */}
       {isSaveModalOpen && (
