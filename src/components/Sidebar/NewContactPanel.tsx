@@ -64,7 +64,7 @@ export const NewContactPanel: React.FC<NewContactPanelProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full bg-white select-none animate-in slide-in-from-left-4 duration-150">
+    <div className="flex flex-col h-full bg-white select-none animate-panel-slide-left">
       {/* WhatsApp Web style header with back arrow */}
       <div className="flex items-center gap-3 px-4 py-4 bg-blue-600 text-white shrink-0">
         <button

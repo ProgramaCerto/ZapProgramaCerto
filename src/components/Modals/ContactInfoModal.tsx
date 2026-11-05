@@ -11,8 +11,14 @@ export const ContactInfoModal: React.FC<ContactInfoModalProps> = ({ contact, onC
   if (!contact) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-150">
-      <div className="bg-white w-full max-w-sm rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+    <div
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-modal-backdrop"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white w-full max-w-sm rounded-2xl border border-slate-200 shadow-2xl overflow-hidden animate-modal-content"
+      >
         {/* Header */}
         <div className="relative h-28 bg-gradient-to-r from-blue-600 to-blue-500">
           <button
@@ -36,9 +42,6 @@ export const ContactInfoModal: React.FC<ContactInfoModalProps> = ({ contact, onC
 
           <div className="flex items-center gap-1.5">
             <h3 className="text-lg font-bold text-slate-900">{contact.name}</h3>
-            {contact.online && (
-              <span className="w-2.5 h-2.5 bg-blue-500 rounded-full" title="Online" />
-            )}
           </div>
           <p className="text-sm font-semibold text-blue-600 mb-4">{contact.handle}</p>
 

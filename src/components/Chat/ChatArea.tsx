@@ -5,13 +5,14 @@ import {
   Camera,
   Image as ImageIcon,
   X,
-  Phone,
-  Video,
-  Download,
+  Trash2,
+  MoreVertical,
   UserPlus,
   Check,
   User,
   Loader2,
+  AlertTriangle,
+  Download,
 } from 'lucide-react';
 import { Chat, Message, User as UserType } from '../../types/chat';
 import { storage } from '../../services/storage';
@@ -38,6 +39,11 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Delete message and conversation states (ao segurar na conversa)
+  const [activeActionMessage, setActiveActionMessage] = useState<Message | null>(null);
+  const [isDeleteChatConfirmOpen, setIsDeleteChatConfirmOpen] = useState(false);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Unsaved Contact state
   const [isContactSaved, setIsContactSaved] = useState<boolean>(chat.isSaved !== false);
@@ -67,54 +73,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     storage.markMessagesAsRead(chat.id, currentUser.id);
   };
 
+  // Scroll logic: strictly scrolls the messages container to the bottom so the user always sees the latest messages
+  const scrollToBottom = (smooth = false) => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      if (smooth) {
+        container.scrollTo({
+          top: container.scrollHeight,
+          behavior: 'smooth',
+        });
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
+    }
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({
+        behavior: smooth ? 'smooth' : 'auto',
+        block: 'end',
+      });
+    }
+  };
+
+  // When chat.id changes (user enters a conversation), immediately position at the bottom (latest messages)
   useEffect(() => {
-    window.scrollTo(0, 0);
-    isInitialLoadRef.current = true;
-    prevMessagesCountRef.current = 0;
     loadMessages();
+
+    // Scroll across multiple layout frames to guarantee the view is at the bottom even as items render
+    scrollToBottom(false);
+    const raf = requestAnimationFrame(() => scrollToBottom(false));
+    const t1 = setTimeout(() => scrollToBottom(false), 50);
+    const t2 = setTimeout(() => scrollToBottom(false), 150);
+    const t3 = setTimeout(() => scrollToBottom(false), 300);
 
     const unsubscribe = storage.subscribe(() => {
       loadMessages();
     });
 
     return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
       unsubscribe();
     };
   }, [chat.id]);
 
-  // Scroll logic: strictly scrolls the messages container so the header and footer remain fixed
-  const scrollToBottom = (smooth = false) => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-    if (smooth) {
-      container.scrollTo({
-        top: container.scrollHeight,
-        behavior: 'smooth',
-      });
-    } else {
-      container.scrollTop = container.scrollHeight;
-    }
-  };
-
+  // When messages length changes (new message arrives or is sent), ensure view stays at bottom
   useEffect(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-
-    if (isInitialLoadRef.current) {
-      scrollToBottom(false);
-      isInitialLoadRef.current = false;
-      prevMessagesCountRef.current = messages.length;
-      return;
-    }
-
-    if (messages.length > prevMessagesCountRef.current) {
-      const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 250;
-      if (isNearBottom) {
-        scrollToBottom(true);
-      }
-      prevMessagesCountRef.current = messages.length;
-    }
-  }, [messages]);
+    scrollToBottom(false);
+    const t = setTimeout(() => scrollToBottom(false), 60);
+    return () => clearTimeout(t);
+  }, [messages.length]);
 
   // Handle Save Unsaved Contact
   const handleConfirmSaveContact = async (e: React.FormEvent) => {
@@ -224,6 +233,40 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     return d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   };
 
+  // Suporte a segurar (long-press) em mensagens para abrir o menu de apagar
+  const handleMessageTouchStart = (msg: Message) => {
+    longPressTimerRef.current = setTimeout(() => {
+      setActiveActionMessage(msg);
+    }, 450);
+  };
+
+  const handleMessageTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  // Ações de Apagar Mensagem e Conversa
+  const handleDeleteMessageForEveryone = async () => {
+    if (!activeActionMessage) return;
+    await storage.deleteMessage(activeActionMessage.id, true);
+    setActiveActionMessage(null);
+  };
+
+  const handleDeleteMessageForMe = async () => {
+    if (!activeActionMessage) return;
+    await storage.deleteMessage(activeActionMessage.id, false);
+    setActiveActionMessage(null);
+  };
+
+  const handleDeleteEntireChat = async () => {
+    await storage.deleteChat(chat.id, currentUser.id, chat.contact.id);
+    setActiveActionMessage(null);
+    setIsDeleteChatConfirmOpen(false);
+    setMessages([]);
+  };
+
   return (
     <div className="flex flex-col h-full min-h-0 w-full bg-[#F4F7FB] relative overflow-hidden select-text">
       {/* Chat Top Header - FIXO no topo, nunca se desloca */}
@@ -233,7 +276,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           <button
             type="button"
             onClick={onBack}
-            className="md:hidden p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+            className="md:hidden p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:scale-95 rounded-xl transition cursor-pointer"
             aria-label="Voltar para lista de conversas"
           >
             <ArrowLeft className="w-5 h-5" />
@@ -256,45 +299,29 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   <User className="w-5 h-5" />
                 </div>
               )}
-              {chat.contact.online && (
-                <span className="absolute bottom-0 right-0 w-3 h-3 bg-blue-500 border-2 border-white rounded-full"></span>
-              )}
             </div>
 
             <div>
               <h2 className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition leading-tight">
                 {chat.contact.name}
               </h2>
-              <div className="text-xs text-slate-500 flex items-center gap-1.5">
-                <span className="text-blue-600 font-medium">{chat.contact.handle}</span>
-                <span className="text-slate-300">·</span>
-                {chat.contact.online ? (
-                  <span className="text-slate-500">online</span>
-                ) : (
-                  <span className="text-slate-400">offline</span>
-                )}
-              </div>
+              <p className="text-xs text-blue-600 font-medium leading-tight mt-0.5">
+                {chat.contact.handle}
+              </p>
             </div>
           </div>
         </div>
 
-        {/* Action icons */}
-        <div className="flex items-center gap-1 text-slate-500">
+        {/* Action icons - Apagar conversa */}
+        <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={() => alert(`Iniciando chamada de áudio com ${chat.contact.name}...`)}
-            title="Chamada de voz"
-            className="p-2 hover:bg-slate-100 hover:text-blue-600 rounded-xl transition cursor-pointer"
+            onClick={() => setIsDeleteChatConfirmOpen(true)}
+            title="Apagar conversa"
+            aria-label="Apagar conversa"
+            className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 active:scale-95 rounded-xl transition cursor-pointer flex items-center justify-center"
           >
-            <Phone className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => alert(`Iniciando chamada de vídeo com ${chat.contact.name}...`)}
-            title="Chamada de vídeo"
-            className="p-2 hover:bg-slate-100 hover:text-blue-600 rounded-xl transition cursor-pointer"
-          >
-            <Video className="w-4 h-4" />
+            <Trash2 className="w-4 h-4" />
           </button>
         </div>
       </header>
@@ -337,75 +364,114 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           return (
             <div
               key={msg.id}
-              className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'} group`}
+              className={`flex flex-col ${isOutgoing ? 'items-end' : 'items-start'} group animate-message-enter`}
             >
-              <div
-                className={`relative max-w-[85%] sm:max-w-[70%] rounded-2xl px-3.5 py-2.5 shadow-xs transition-all ${
-                  isOutgoing
-                    ? 'bg-blue-600 text-white rounded-br-xs'
-                    : 'bg-white text-slate-900 border border-slate-200/80 rounded-bl-xs'
-                }`}
-              >
-                {/* 1. Text Message */}
-                {msg.type === 'text' && (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
-                    {msg.text}
-                  </p>
+              <div className="flex items-center gap-1.5 max-w-[85%] sm:max-w-[70%]">
+                {isOutgoing && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveActionMessage(msg);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 cursor-pointer shrink-0"
+                    title="Opções da conversa"
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </button>
                 )}
 
-                {/* 2. Photo / Image Message */}
-                {(msg.type === 'image' || !!msg.photosAttached) && (msg.mediaUrl || msg.photosAttached) && (
-                  <div className="space-y-1.5">
-                    <div
-                      onClick={() => setFullscreenImage(msg.mediaUrl || msg.photosAttached || null)}
-                      className="rounded-xl overflow-hidden cursor-pointer max-h-72 bg-slate-100 border border-black/5 hover:opacity-95 transition"
-                    >
-                      <img
-                        src={msg.mediaUrl || msg.photosAttached}
-                        alt="Foto enviada"
-                        className="w-full h-auto object-cover max-h-72 rounded-xl"
-                        referrerPolicy="no-referrer"
-                      />
-                    </div>
-                    {msg.text && msg.text !== '📷 Foto' && (
-                      <p className="text-sm pt-1 leading-snug">{msg.text}</p>
-                    )}
-                  </div>
-                )}
-
-
-
-                {/* Timestamp & Bolinha Status Indicator (Exactly as specified) */}
                 <div
-                  className={`flex items-center justify-end gap-1.5 text-[10px] mt-1 font-medium select-none ${
-                    isOutgoing ? 'text-blue-100' : 'text-slate-400'
+                  onTouchStart={() => handleMessageTouchStart(msg)}
+                  onTouchEnd={handleMessageTouchEnd}
+                  onTouchMove={handleMessageTouchEnd}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setActiveActionMessage(msg);
+                  }}
+                  className={`relative rounded-2xl px-3.5 py-2.5 shadow-xs transition-all select-text cursor-pointer ${
+                    isOutgoing
+                      ? 'bg-blue-600 text-white rounded-br-xs'
+                      : 'bg-white text-slate-900 border border-slate-200/80 rounded-bl-xs'
                   }`}
                 >
-                  <span>{formatMsgTime(msg.timestamp)}</span>
+                  {/* 1. Text Message */}
+                  {msg.type === 'text' && (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+                      {msg.text}
+                    </p>
+                  )}
 
-                  {/* BOLINHA STATUS LOGIC:
-                      1. msg.status === 'sending': Nenhuma bolinha aparece (ainda não chegou no celular da pessoa)
-                      2. msg.status === 'delivered': A bolinha aparece, só que NÃO está azul (tocou no celular da pessoa)
-                      3. msg.status === 'read': A bolinha fica azul (a pessoa viu a mensagem)
-                  */}
-                  {isOutgoing && (
-                    <div className="flex items-center justify-center pl-0.5">
-                      {msg.status === 'sending' ? (
-                        null
-                      ) : msg.status === 'delivered' ? (
-                        <span
-                          title="Mensagem tocou no celular da pessoa"
-                          className="w-2 h-2 rounded-full bg-white/70 border border-white/90 shrink-0 inline-block"
+                  {/* 2. Photo / Image Message */}
+                  {(msg.type === 'image' || !!msg.photosAttached) && (msg.mediaUrl || msg.photosAttached) && (
+                    <div className="space-y-1.5">
+                      <div
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setFullscreenImage(msg.mediaUrl || msg.photosAttached || null);
+                        }}
+                        className="rounded-xl overflow-hidden cursor-pointer max-h-72 bg-slate-100 border border-black/5 hover:opacity-95 transition"
+                      >
+                        <img
+                          src={msg.mediaUrl || msg.photosAttached}
+                          alt="Foto enviada"
+                          onLoad={() => scrollToBottom(false)}
+                          className="w-full h-auto object-cover max-h-72 rounded-xl"
+                          referrerPolicy="no-referrer"
                         />
-                      ) : (
-                        <span
-                          title="A pessoa viu a mensagem"
-                          className="w-2 h-2 rounded-full bg-cyan-300 ring-1 ring-white/90 shadow-xs shrink-0 inline-block"
-                        />
+                      </div>
+                      {msg.text && msg.text !== '📷 Foto' && (
+                        <p className="text-sm pt-1 leading-snug">{msg.text}</p>
                       )}
                     </div>
                   )}
+
+                  {/* Timestamp & Bolinha Status Indicator (Exactly as specified) */}
+                  <div
+                    className={`flex items-center justify-end gap-1.5 text-[10px] mt-1 font-medium select-none ${
+                      isOutgoing ? 'text-blue-100' : 'text-slate-400'
+                    }`}
+                  >
+                    <span>{formatMsgTime(msg.timestamp)}</span>
+
+                    {/* BOLINHA STATUS LOGIC:
+                        1. msg.status === 'sending': Nenhuma bolinha aparece (ainda não chegou no celular da pessoa)
+                        2. msg.status === 'delivered': A bolinha aparece, só que NÃO está azul (tocou no celular da pessoa)
+                        3. msg.status === 'read': A bolinha fica azul (a pessoa viu a mensagem)
+                    */}
+                    {isOutgoing && (
+                      <div className="flex items-center justify-center pl-0.5">
+                        {msg.status === 'sending' ? (
+                          null
+                        ) : msg.status === 'delivered' ? (
+                          <span
+                            title="Mensagem tocou no celular da pessoa"
+                            className="w-2 h-2 rounded-full bg-white/70 border border-white/90 shrink-0 inline-block"
+                          />
+                        ) : (
+                          <span
+                            title="A pessoa viu a mensagem"
+                            className="w-2 h-2 rounded-full bg-cyan-300 ring-1 ring-white/90 shadow-xs shrink-0 inline-block"
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {!isOutgoing && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActiveActionMessage(msg);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-200/60 cursor-pointer shrink-0"
+                    title="Opções da conversa"
+                  >
+                    <MoreVertical className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
           );
@@ -492,8 +558,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* Modal para Salvar Contato com Nome */}
       {isSaveModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-sm w-full p-5 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-modal-backdrop">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-5 space-y-4 animate-modal-content">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <UserPlus className="w-5 h-5 text-blue-600" />
@@ -566,8 +632,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
       {/* Fullscreen Photo Lightbox Modal */}
       {fullscreenImage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-xs animate-modal-backdrop">
+          <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center animate-modal-content">
             <div className="absolute top-4 right-4 flex items-center gap-2 z-10">
               <a
                 href={fullscreenImage}
@@ -592,6 +658,122 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl"
               referrerPolicy="no-referrer"
             />
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Ações ao Segurar na Conversa / Mensagem */}
+      {activeActionMessage && (
+        <div
+          onClick={() => setActiveActionMessage(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-modal-backdrop"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xs w-full p-5 space-y-4 animate-modal-content"
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+              <h3 className="text-sm font-bold text-slate-900">Opções da Mensagem</h3>
+              <button
+                type="button"
+                onClick={() => setActiveActionMessage(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-1.5">
+              {/* Apagar para todos (se a mensagem foi enviada pelo próprio usuário) */}
+              {activeActionMessage.senderId === currentUser.id && (
+                <button
+                  type="button"
+                  onClick={handleDeleteMessageForEveryone}
+                  className="w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition text-left cursor-pointer active:scale-98"
+                >
+                  <Trash2 className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>Apagar para todos</span>
+                </button>
+              )}
+
+              {/* Apagar para mim */}
+              <button
+                type="button"
+                onClick={handleDeleteMessageForMe}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-xl transition text-left cursor-pointer active:scale-98"
+              >
+                <Trash2 className="w-4 h-4 shrink-0 text-slate-400" />
+                <span>Apagar para mim</span>
+              </button>
+
+              {/* Apagar conversa inteira */}
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveActionMessage(null);
+                  setIsDeleteChatConfirmOpen(true);
+                }}
+                className="w-full flex items-center gap-3 px-3.5 py-2.5 text-xs font-semibold text-rose-700 bg-rose-50/70 hover:bg-rose-100 rounded-xl transition text-left cursor-pointer active:scale-98"
+              >
+                <Trash2 className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>Apagar conversa</span>
+              </button>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setActiveActionMessage(null)}
+                className="w-full py-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 rounded-xl transition text-center cursor-pointer"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação para Apagar Conversa Inteira */}
+      {isDeleteChatConfirmOpen && (
+        <div
+          onClick={() => setIsDeleteChatConfirmOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-modal-backdrop"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-5 space-y-4 animate-modal-content"
+          >
+            <div className="flex items-center gap-3 pb-2 border-b border-slate-100">
+              <div className="w-9 h-9 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Apagar Conversa?</h3>
+                <p className="text-xs text-slate-500">Todas as mensagens serão excluídas.</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Tem certeza que deseja apagar a conversa com <strong>{chat.contact.name}</strong>? Esta ação não pode ser desfeita.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsDeleteChatConfirmOpen(false)}
+                className="px-3.5 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteEntireChat}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-xs rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer active:scale-95"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Apagar Conversa</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

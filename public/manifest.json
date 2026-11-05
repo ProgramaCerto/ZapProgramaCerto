@@ -1,0 +1,17 @@
+{
+  "name": "ZapProgramaCerto",
+  "short_name": "ZapProgramaCerto",
+  "description": "Aplicativo moderno de mensagens instantâneas e conversas em tempo real.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#2563EB",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

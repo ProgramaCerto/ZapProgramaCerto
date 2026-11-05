@@ -1185,14 +1185,48 @@ class StorageService {
     }
   }
 
-  public deleteMessage(messageId: string) {
+  public async deleteMessage(messageId: string, forEveryone = true) {
     const messages = this.getStoredMessages().filter((m) => m.id !== messageId);
     this.saveMessages(messages);
 
+    if (forEveryone) {
+      const client = getSupabaseClient();
+      if (client) {
+        try {
+          await client.from('mensagens').delete().eq('id', messageId);
+        } catch (e) {
+          console.warn('Erro ao deletar mensagem no banco:', e);
+        }
+      }
+    }
+    this.notifyListeners();
+  }
+
+  public async deleteChat(chatId: string, user1Id: string, user2Id: string) {
+    // Remove mensagens da conversa em memória
+    const filtered = this.getStoredMessages().filter((m) => m.chatId !== chatId);
+    this.saveMessages(filtered);
+
+    // Remove mensagens no banco de dados Supabase
     const client = getSupabaseClient();
     if (client) {
-      Promise.resolve(client.from('mensagens').delete().eq('id', messageId)).catch(() => {});
+      try {
+        await client
+          .from('mensagens')
+          .delete()
+          .eq('remetente_id', user1Id)
+          .eq('destinatario_id', user2Id);
+
+        await client
+          .from('mensagens')
+          .delete()
+          .eq('remetente_id', user2Id)
+          .eq('destinatario_id', user1Id);
+      } catch (e) {
+        console.warn('Erro ao apagar conversa no banco de dados:', e);
+      }
     }
+    this.notifyListeners();
   }
 }
 

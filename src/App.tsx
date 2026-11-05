@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, ShieldCheck, UserPlus } from 'lucide-react';
-import { storage } from './services/storage';
+import { MessageSquare, ShieldCheck, UserPlus, Users } from 'lucide-react';
+import { storage, getConversationId } from './services/storage';
 import { User, Chat } from './types/chat';
 import { Login } from './components/Auth/Login';
 import { Register } from './components/Auth/Register';
@@ -8,10 +8,11 @@ import { ChatList } from './components/Chat/ChatList';
 import { ChatArea } from './components/Chat/ChatArea';
 import { NewContactPanel } from './components/Sidebar/NewContactPanel';
 import { SettingsPanel } from './components/Sidebar/SettingsPanel';
+import { ContactsListPanel } from './components/Sidebar/ContactsListPanel';
 import { ContactInfoModal } from './components/Modals/ContactInfoModal';
 import { requestNotificationPermission, initServiceWorker } from './utils/notifications';
 
-type SidebarView = 'chats' | 'settings' | 'new-contact';
+type SidebarView = 'chats' | 'settings' | 'new-contact' | 'contacts';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -106,6 +107,24 @@ export default function App() {
     setSidebarView('chats');
   };
 
+  const handleSelectContactFromList = (contact: User) => {
+    if (!currentUser) return;
+    const chatId = getConversationId(currentUser.id, contact.id);
+    const existing = chats.find((c) => c.id === chatId);
+    const targetChat: Chat = existing || {
+      id: chatId,
+      participants: [currentUser.id, contact.id],
+      contact: {
+        ...contact,
+      },
+      unreadCount: 0,
+      isSaved: true,
+      updatedAt: new Date().toISOString(),
+    };
+    handleSelectChat(targetChat);
+    setSidebarView('chats');
+  };
+
   // If user is not authenticated
   if (!currentUser) {
     if (authView === 'register') {
@@ -138,9 +157,19 @@ export default function App() {
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
               onOpenAddContact={() => setSidebarView('new-contact')}
+              onOpenContactsList={() => setSidebarView('contacts')}
               onOpenSettings={() => setSidebarView('settings')}
               onLogout={handleLogout}
               isContinuousSyncing={true}
+            />
+          )}
+
+          {sidebarView === 'contacts' && (
+            <ContactsListPanel
+              currentUser={currentUser}
+              onBack={() => setSidebarView('chats')}
+              onSelectContact={handleSelectContactFromList}
+              onOpenAddContact={() => setSidebarView('new-contact')}
             />
           )}
 
@@ -185,10 +214,10 @@ export default function App() {
                 </div>
                 <div>
                   <h2 className="text-2xl font-bold tracking-tight text-slate-900">
-                    ZapProgramaCerto para Web
+                    ZapProgramaCerto
                   </h2>
                   <p className="text-sm text-slate-500 mt-2 leading-relaxed">
-                    Envie e receba mensagens de texto, fotos tiradas na hora e áudios com sincronização contínua em tempo real.
+                    Envie e receba mensagens de texto e fotos salvas com segurança em tempo real.
                   </p>
                 </div>
 
@@ -196,23 +225,24 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setSidebarView('new-contact')}
-                    className="w-full sm:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm rounded-xl shadow-sm transition inline-flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full sm:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-sm rounded-xl shadow-sm transition inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <UserPlus className="w-4 h-4" />
                     <span>Adicionar Novo Contato</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSidebarView('settings')}
-                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium text-sm rounded-xl transition inline-flex items-center justify-center gap-2 cursor-pointer"
+                    onClick={() => setSidebarView('contacts')}
+                    className="w-full sm:w-auto px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 active:scale-95 text-slate-700 font-medium text-sm rounded-xl transition inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    <span>Configurações</span>
+                    <Users className="w-4 h-4 text-blue-600" />
+                    <span>Meus Contatos</span>
                   </button>
                 </div>
 
                 <div className="pt-8 flex items-center justify-center gap-2 text-xs text-slate-400">
                   <ShieldCheck className="w-4 h-4 text-blue-600" />
-                  <span>Sincronização contínua com banco de dados</span>
+                  <span>Mensagens criptografadas de ponta a ponta</span>
                 </div>
               </div>
             </div>

@@ -49,7 +49,12 @@ export const Login: React.FC<LoginProps> = ({
     }
 
     setIsLoading(true);
-    storage.login(handle, password).then((result) => {
+    let cleanHandle = handle.trim();
+    if (!cleanHandle.startsWith('@')) {
+      cleanHandle = `@${cleanHandle}`;
+    }
+
+    storage.login(cleanHandle, password).then((result) => {
       setIsLoading(false);
       if (result.success && result.user) {
         onLoginSuccess(result.user);
@@ -62,23 +67,17 @@ export const Login: React.FC<LoginProps> = ({
     });
   };
 
-  const fillQuickDemo = (demoHandle: string) => {
-    setHandle(demoHandle);
-    setPassword('123');
-    setError(null);
-  };
-
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 selection:bg-blue-100">
-      <div className="w-full max-w-md">
+    <div className="fixed inset-0 h-full w-full overflow-y-auto bg-slate-50 flex flex-col items-center justify-start sm:justify-center p-4 py-8 selection:bg-blue-100 overscroll-contain">
+      <div className="w-full max-w-md my-auto animate-modal-content">
         {/* Brand header */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/20 mb-4">
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-500/20 mb-3">
             <MessageSquare className="w-8 h-8" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">ZapProgramaCerto</h1>
           <p className="text-sm text-slate-500 mt-1">
-            Conversas em tempo real, envio de áudio, fotos e contatos
+            Mensagens em tempo real, envio de fotos e contatos
           </p>
         </div>
 
@@ -87,7 +86,7 @@ export const Login: React.FC<LoginProps> = ({
           <div className="mb-6">
             <h2 className="text-lg font-semibold text-slate-900">Entrar na sua conta</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Digite seu @arroba e sua senha para acessar as conversas
+              Digite seu usuário e senha para acessar as conversas
             </p>
           </div>
 
@@ -106,10 +105,10 @@ export const Login: React.FC<LoginProps> = ({
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Arroba Input */}
+            {/* Usuário Input */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
-                Seu Arroba (@)
+                Usuário
               </label>
               <div className="relative">
                 <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -119,7 +118,7 @@ export const Login: React.FC<LoginProps> = ({
                   type="text"
                   value={handle}
                   onChange={(e) => setHandle(e.target.value)}
-                  placeholder="@seunome"
+                  placeholder="Digite seu usuário"
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
                   autoFocus={!handle}
                 />
@@ -177,7 +176,7 @@ export const Login: React.FC<LoginProps> = ({
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full mt-2 py-3 px-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-sm rounded-xl shadow-sm transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
+              className="w-full mt-2 py-3 px-4 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 active:scale-98 text-white font-semibold text-sm rounded-xl shadow-sm transition-all duration-150 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-70"
             >
               {isLoading ? (
                 <span>Entrando...</span>
@@ -202,23 +201,6 @@ export const Login: React.FC<LoginProps> = ({
                 Cadastrar-se
               </button>
             </p>
-          </div>
-        </div>
-
-        {/* Quick test accounts */}
-        <div className="mt-6 bg-white/70 border border-slate-200 rounded-xl p-3 text-center">
-          <p className="text-xs text-slate-500 mb-2">Contas demonstrativas para teste rápido (senha: 123):</p>
-          <div className="flex flex-wrap items-center justify-center gap-2">
-            {['@ana', '@carlos', '@mariasilva'].map((demo) => (
-              <button
-                key={demo}
-                type="button"
-                onClick={() => fillQuickDemo(demo)}
-                className="text-xs bg-slate-100 hover:bg-blue-50 hover:text-blue-700 text-slate-700 py-1 px-2.5 rounded-lg border border-slate-200 transition cursor-pointer"
-              >
-                Entrar como {demo}
-              </button>
-            ))}
           </div>
         </div>
       </div>
