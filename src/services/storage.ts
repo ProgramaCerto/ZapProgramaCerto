@@ -1285,7 +1285,7 @@ class StorageService {
           messageText: params.text || '',
           messageType: params.type,
           sentAt: formattedTime,
-          chatUrl: currentOrigin,
+          chatUrl: 'https://zap-programacerto.vercel.app',
         }),
       });
     } catch (err) {

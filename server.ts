@@ -56,7 +56,7 @@ app.post('/api/send-email-notification', async (req, res) => {
     const appName = 'ZapProgramaCerto';
     const displaySender = senderName || senderHandle || 'Um contato';
     const formattedTime = sentAt || new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const targetUrl = chatUrl || process.env.APP_URL || 'https://ais-dev-ijc42sx5nrmvymiq2qu7je-125639828090.us-west2.run.app';
+    const targetUrl = 'https://zap-programacerto.vercel.app';
 
     let contentPreview = messageText || '';
     if (messageType === 'image') {
