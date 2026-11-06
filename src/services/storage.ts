@@ -19,6 +19,41 @@ export interface SavedContact {
   nome_salvo: string;
 }
 
+export function extractEmailAndCleanBio(rawBio?: string): { email?: string; cleanBio: string } {
+  if (!rawBio) return { cleanBio: 'Disponível no ZapProgramaCerto' };
+  const match = rawBio.match(/\[email:([^\]]+)\]/);
+  if (match) {
+    const email = match[1].trim();
+    const cleanBio = rawBio.replace(/\[email:[^\]]+\]/, '').trim() || 'Disponível no ZapProgramaCerto';
+    return { email, cleanBio };
+  }
+  return { cleanBio: rawBio };
+}
+
+export function encodeEmailInBio(bio: string, email?: string): string {
+  const { cleanBio } = extractEmailAndCleanBio(bio);
+  if (email && email.trim()) {
+    return `${cleanBio} [email:${email.trim()}]`;
+  }
+  return cleanBio;
+}
+
+export function parseUserRow(u: Record<string, any>): User {
+  const { email: bioEmail, cleanBio } = extractEmailAndCleanBio(u.bio);
+  const rawEmail = u.email && typeof u.email === 'string' && u.email.trim() ? u.email.trim() : bioEmail;
+  return {
+    id: u.id,
+    name: u.nome,
+    handle: u.arroba,
+    password: u.senha,
+    email: rawEmail || undefined,
+    avatar: u.avatar_url || '',
+    bio: cleanBio,
+    online: u.online,
+    createdAt: u.criado_em || new Date().toISOString(),
+  };
+}
+
 class StorageService {
   private listeners: (() => void)[] = [];
   private syncInterval: NodeJS.Timeout | null = null;
@@ -314,16 +349,7 @@ class StorageService {
 
         for (const u of data) {
           const idx = local.findIndex((l) => l.id === u.id);
-          const mappedUser: User = {
-            id: u.id,
-            name: u.nome,
-            handle: u.arroba,
-            password: u.senha,
-            avatar: u.avatar_url || '',
-            bio: u.bio || 'Disponível no ZapProgramaCerto',
-            online: u.online,
-            createdAt: u.criado_em || new Date().toISOString(),
-          };
+          const mappedUser = parseUserRow(u);
 
           if (idx === -1) {
             local.push(mappedUser);
@@ -331,7 +357,8 @@ class StorageService {
           } else if (
             local[idx].name !== mappedUser.name ||
             local[idx].avatar !== mappedUser.avatar ||
-            local[idx].bio !== mappedUser.bio
+            local[idx].bio !== mappedUser.bio ||
+            local[idx].email !== mappedUser.email
           ) {
             local[idx] = { ...local[idx], ...mappedUser };
             changed = true;
@@ -378,16 +405,7 @@ class StorageService {
     try {
       const { data, error } = await client.from('usuarios').select('*').eq('id', userId).maybeSingle();
       if (!error && data) {
-        const mappedUser: User = {
-          id: data.id,
-          name: data.nome,
-          handle: data.arroba,
-          password: data.senha,
-          avatar: data.avatar_url || '',
-          bio: data.bio || 'Disponível no ZapProgramaCerto',
-          online: data.online,
-          createdAt: data.criado_em || new Date().toISOString(),
-        };
+        const mappedUser = parseUserRow(data);
         this.memoryUsers.push(mappedUser);
         this.notifyListeners();
       }
@@ -459,16 +477,7 @@ class StorageService {
     try {
       const { data, error } = await client.from('usuarios').select('*').eq('id', userId).maybeSingle();
       if (!error && data) {
-        const user: User = {
-          id: data.id,
-          name: data.nome,
-          handle: data.arroba,
-          password: data.senha,
-          avatar: data.avatar_url || '',
-          bio: data.bio || 'Disponível no ZapProgramaCerto',
-          online: data.online,
-          createdAt: data.criado_em || new Date().toISOString(),
-        };
+        const user = parseUserRow(data);
         this.memoryCurrentUser = user;
         const idx = this.memoryUsers.findIndex((u) => u.id === user.id);
         if (idx >= 0) this.memoryUsers[idx] = user;
@@ -504,7 +513,8 @@ class StorageService {
     name: string,
     rawHandle: string,
     password: string,
-    customAvatar?: string
+    customAvatar?: string,
+    rawEmail?: string
   ): Promise<{ success: boolean; message?: string; user?: User }> {
     let cleanHandle = rawHandle.trim();
     if (!cleanHandle.startsWith('@')) {
@@ -521,6 +531,8 @@ class StorageService {
     if (!password || password.length < 3) {
       return { success: false, message: 'A senha deve ter pelo menos 3 dígitos.' };
     }
+
+    const cleanEmail = rawEmail?.trim() || '';
 
     const client = getSupabaseClient();
     if (!client) {
@@ -539,7 +551,8 @@ class StorageService {
         return { success: false, message: 'Este usuário já está cadastrado no banco de dados. Escolha outro.' };
       }
 
-      const { data, error } = await client
+      // Tenta inserir com a coluna email primeiro; se a coluna ainda não existir no schema do Supabase, codifica em bio
+      let insertResult = await client
         .from('usuarios')
         .insert({
           nome: name.trim(),
@@ -547,25 +560,37 @@ class StorageService {
           senha: password,
           avatar_url: customAvatar || '',
           bio: 'Disponível no ZapProgramaCerto',
+          email: cleanEmail || null,
           online: true,
         })
         .select()
         .maybeSingle();
 
-      if (error || !data) {
+      if (insertResult.error && (insertResult.error.code === '42703' || insertResult.error.message?.includes('email'))) {
+        // Fallback: codifica o email na bio até a migration SQL ser executada
+        const fallbackBio = encodeEmailInBio('Disponível no ZapProgramaCerto', cleanEmail);
+        insertResult = await client
+          .from('usuarios')
+          .insert({
+            nome: name.trim(),
+            arroba: cleanHandle,
+            senha: password,
+            avatar_url: customAvatar || '',
+            bio: fallbackBio,
+            online: true,
+          })
+          .select()
+          .maybeSingle();
+      }
+
+      if (insertResult.error || !insertResult.data) {
         return { success: false, message: 'Erro ao salvar novo usuário no banco de dados.' };
       }
 
-      const newUser: User = {
-        id: data.id,
-        name: data.nome,
-        handle: data.arroba,
-        password: data.senha,
-        avatar: data.avatar_url || '',
-        bio: data.bio || 'Disponível no ZapProgramaCerto',
-        online: true,
-        createdAt: data.criado_em || new Date().toISOString(),
-      };
+      const newUser = parseUserRow(insertResult.data);
+      if (cleanEmail && !newUser.email) {
+        newUser.email = cleanEmail;
+      }
 
       const idx = this.memoryUsers.findIndex((u) => u.id === newUser.id);
       if (idx >= 0) this.memoryUsers[idx] = newUser;
@@ -610,16 +635,7 @@ class StorageService {
         return { success: false, message: 'Senha incorreta. Verifique e tente novamente.' };
       }
 
-      const remoteUser: User = {
-        id: data.id,
-        name: data.nome,
-        handle: data.arroba,
-        password: data.senha,
-        avatar: data.avatar_url || '',
-        bio: data.bio || 'Disponível no ZapProgramaCerto',
-        online: true,
-        createdAt: data.criado_em || new Date().toISOString(),
-      };
+      const remoteUser = parseUserRow(data);
 
       this.setCurrentUser(remoteUser);
       this.clearPrefilledHandle();
@@ -691,7 +707,7 @@ class StorageService {
 
   public async updateProfile(
     userId: string,
-    updates: { name?: string; bio?: string; avatar?: string }
+    updates: { name?: string; bio?: string; avatar?: string; email?: string }
   ): Promise<{ success: boolean; user?: User }> {
     const client = getSupabaseClient();
     if (!client) return { success: false };
@@ -699,27 +715,39 @@ class StorageService {
     try {
       const updatePayload: Record<string, unknown> = {};
       if (updates.name) updatePayload.nome = updates.name.trim();
-      if (updates.bio !== undefined) updatePayload.bio = updates.bio.trim();
       if (updates.avatar !== undefined) updatePayload.avatar_url = updates.avatar;
 
-      const { data, error } = await client
+      let targetBio = updates.bio !== undefined ? updates.bio.trim() : (this.memoryCurrentUser?.bio || '');
+      const targetEmail = updates.email !== undefined ? updates.email.trim() : this.memoryCurrentUser?.email;
+
+      if (updates.bio !== undefined) updatePayload.bio = targetBio;
+      if (updates.email !== undefined) updatePayload.email = targetEmail || null;
+
+      let { data, error } = await client
         .from('usuarios')
         .update(updatePayload)
         .eq('id', userId)
         .select()
         .maybeSingle();
 
+      if (error && (error.code === '42703' || error.message?.includes('email'))) {
+        delete updatePayload.email;
+        updatePayload.bio = encodeEmailInBio(targetBio, targetEmail);
+        const retry = await client
+          .from('usuarios')
+          .update(updatePayload)
+          .eq('id', userId)
+          .select()
+          .maybeSingle();
+        data = retry.data;
+        error = retry.error;
+      }
+
       if (!error && data) {
-        const updated: User = {
-          id: data.id,
-          name: data.nome,
-          handle: data.arroba,
-          password: data.senha,
-          avatar: data.avatar_url || '',
-          bio: data.bio || 'Disponível no ZapProgramaCerto',
-          online: data.online,
-          createdAt: data.criado_em || new Date().toISOString(),
-        };
+        const updated = parseUserRow(data);
+        if (targetEmail && !updated.email) {
+          updated.email = targetEmail;
+        }
 
         const idx = this.memoryUsers.findIndex((u) => u.id === userId);
         if (idx >= 0) this.memoryUsers[idx] = updated;
@@ -798,15 +826,7 @@ class StorageService {
           .maybeSingle();
 
         if (!error && data) {
-          const user: User = {
-            id: data.id,
-            name: data.nome,
-            handle: data.arroba,
-            avatar: data.avatar_url || '',
-            bio: data.bio || '',
-            online: data.online,
-            createdAt: data.criado_em || new Date().toISOString(),
-          };
+          const user = parseUserRow(data);
 
           const idx = this.memoryUsers.findIndex((u) => u.id === user.id);
           if (idx >= 0) this.memoryUsers[idx] = user;
@@ -1173,7 +1193,104 @@ class StorageService {
       }, 400);
     }
 
+    // Dispara notificação por e-mail via Gmail SMTP em segundo plano para o destinatário
+    if (resolvedRecipientId) {
+      this.sendEmailNotificationForMessage({
+        senderId: params.senderId,
+        senderHandle: params.senderHandle,
+        recipientId: resolvedRecipientId,
+        text: params.text,
+        type: params.type,
+      }).catch((e) => {
+        console.warn('Erro ao disparar notificação por e-mail:', e);
+      });
+    }
+
     return newMessage;
+  }
+
+  /**
+   * Envia notificação por e-mail para o destinatário usando o Gmail SMTP
+   * Inclui o nome com o qual o remetente está salvo no celular do destinatário
+   */
+  private async sendEmailNotificationForMessage(params: {
+    senderId: string;
+    senderHandle: string;
+    recipientId: string;
+    text?: string;
+    type: 'text' | 'image' | 'audio';
+  }) {
+    try {
+      const client = getSupabaseClient();
+      if (!client) return;
+
+      // 1. Obter dados do destinatário (incluindo seu e-mail cadastrado)
+      let recipient = this.memoryUsers.find((u) => u.id === params.recipientId);
+      let recipientEmail = recipient?.email;
+
+      if (!recipientEmail) {
+        const { data: recRow } = await client
+          .from('usuarios')
+          .select('*')
+          .eq('id', params.recipientId)
+          .maybeSingle();
+
+        if (recRow) {
+          const parsed = parseUserRow(recRow);
+          recipientEmail = parsed.email;
+          if (!recipient) {
+            recipient = parsed;
+            this.memoryUsers.push(parsed);
+          } else {
+            recipient.email = parsed.email;
+          }
+        }
+      }
+
+      if (!recipientEmail || !recipientEmail.includes('@')) {
+        // Destinatário não possui e-mail cadastrado para notificações
+        return;
+      }
+
+      // 2. Verificar como o remetente está salvo no celular/contatos do destinatário
+      let senderSavedName = '';
+      const { data: contactRow } = await client
+        .from('contatos')
+        .select('nome_salvo')
+        .eq('usuario_id', params.recipientId)
+        .eq('contato_id', params.senderId)
+        .maybeSingle();
+
+      if (contactRow?.nome_salvo && contactRow.nome_salvo.trim()) {
+        senderSavedName = contactRow.nome_salvo.trim();
+      }
+
+      if (!senderSavedName) {
+        const senderUser = this.memoryUsers.find((u) => u.id === params.senderId);
+        senderSavedName = senderUser?.name || params.senderHandle || 'Seu contato';
+      }
+
+      const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      const formattedTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+      // 3. Dispara POST para o endpoint do servidor local (/api/send-email-notification)
+      await fetch('/api/send-email-notification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          toEmail: recipientEmail,
+          senderName: senderSavedName,
+          senderHandle: params.senderHandle,
+          recipientName: recipient?.name || '',
+          messageText: params.text || '',
+          messageType: params.type,
+          sentAt: formattedTime,
+          chatUrl: currentOrigin,
+        }),
+      });
+    } catch (err) {
+      console.warn('Erro ao processar notificação por e-mail:', err);
+    }
   }
 
   private updateLocalStatus(messageId: string, status: 'delivered' | 'read') {

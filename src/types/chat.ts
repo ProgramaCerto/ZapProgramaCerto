@@ -3,6 +3,7 @@ export interface User {
   name: string;
   handle: string; // e.g. "@lucas" or "lucas"
   password?: string;
+  email?: string;
   avatar: string;
   bio?: string;
   online?: boolean;

@@ -13,11 +13,15 @@ CREATE TABLE IF NOT EXISTS public.usuarios (
     nome TEXT NOT NULL,
     arroba TEXT NOT NULL UNIQUE,
     senha TEXT NOT NULL,
+    email TEXT,
     avatar_url TEXT,
     bio TEXT DEFAULT 'Disponível no ZapProgramaCerto',
     online BOOLEAN DEFAULT false,
     criado_em TIMESTAMPTZ DEFAULT TIMEZONE('utc', NOW())
 );
+
+-- Migração para adicionar coluna de e-mail caso a tabela já exista
+ALTER TABLE public.usuarios ADD COLUMN IF NOT EXISTS email TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_usuarios_arroba ON public.usuarios (LOWER(arroba));
 

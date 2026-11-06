@@ -18,6 +18,8 @@ import {
   Mic,
   Smartphone,
   Sparkles,
+  Mail,
+  Send,
 } from 'lucide-react';
 import { storage } from '../../services/storage';
 import { User as UserType } from '../../types/chat';
@@ -108,7 +110,10 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
   // Profile
   const [name, setName] = useState(currentUser.name);
   const [bio, setBio] = useState(currentUser.bio || '');
+  const [email, setEmail] = useState(currentUser.email || '');
   const [profileSuccess, setProfileSuccess] = useState<string | null>(null);
+  const [testingEmail, setTestingEmail] = useState(false);
+  const [emailTestFeedback, setEmailTestFeedback] = useState<string | null>(null);
 
   // Security / Password
   const [currentPassword, setCurrentPassword] = useState('');
@@ -158,11 +163,41 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
     setProfileSuccess(null);
     if (!name.trim()) return;
 
-    const result = await storage.updateProfile(currentUser.id, { name, bio });
+    const result = await storage.updateProfile(currentUser.id, { name, bio, email });
     if (result.success && result.user) {
       onUpdateUser(result.user);
       setProfileSuccess('Perfil atualizado com sucesso no banco de dados!');
       setTimeout(() => setProfileSuccess(null), 3000);
+    }
+  };
+
+  const handleSendTestEmail = async () => {
+    if (!email || !email.includes('@')) {
+      setEmailTestFeedback('Por favor, informe um endereço de e-mail válido para testar.');
+      setTimeout(() => setEmailTestFeedback(null), 3500);
+      return;
+    }
+
+    setTestingEmail(true);
+    setEmailTestFeedback(null);
+
+    try {
+      const res = await fetch('/api/test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ toEmail: email.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setEmailTestFeedback(`✅ E-mail de teste enviado com sucesso para ${email}! Verifique sua caixa de entrada.`);
+      } else {
+        setEmailTestFeedback(`❌ Erro ao enviar e-mail: ${data.error || 'Falha no SMTP'}`);
+      }
+    } catch {
+      setEmailTestFeedback('❌ Falha na conexão com o servidor para envio de e-mail.');
+    } finally {
+      setTestingEmail(false);
+      setTimeout(() => setEmailTestFeedback(null), 6000);
     }
   };
 
@@ -348,6 +383,49 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
                   placeholder="Disponível no ZapProgramaCerto..."
                   className="w-full px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition resize-none"
                 />
+              </div>
+
+              {/* E-mail para Notificações Gmail SMTP */}
+              <div className="pt-1">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                    E-mail para Notificações
+                  </label>
+                  <span className="text-[11px] text-blue-600 font-medium">Gmail SMTP</span>
+                </div>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="exemplo@gmail.com"
+                    className="w-full pl-10 pr-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Toda vez que te enviarem uma mensagem, você receberá um e-mail avisando quem mandou e o texto enviado.
+                </p>
+
+                {emailTestFeedback && (
+                  <div className={`mt-2 p-2.5 text-xs rounded-xl border ${emailTestFeedback.startsWith('✅') ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'}`}>
+                    {emailTestFeedback}
+                  </div>
+                )}
+
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={handleSendTestEmail}
+                    disabled={testingEmail || !email}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{testingEmail ? 'Enviando teste...' : 'Testar envio de e-mail'}</span>
+                  </button>
+                </div>
               </div>
 
               <button

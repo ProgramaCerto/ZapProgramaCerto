@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { MessageSquare, Eye, EyeOff, Lock, AtSign, User, ArrowLeft, CheckCircle2, AlertCircle, Camera, Upload } from 'lucide-react';
+import { MessageSquare, Eye, EyeOff, Lock, AtSign, User, ArrowLeft, CheckCircle2, AlertCircle, Camera, Upload, Mail } from 'lucide-react';
 import { storage } from '../../services/storage';
 import { requestNotificationPermission } from '../../utils/notifications';
 
@@ -10,6 +10,7 @@ interface RegisterProps {
 export const Register: React.FC<RegisterProps> = ({ onGoToLogin }) => {
   const [name, setName] = useState('');
   const [handle, setHandle] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string>('');
   const [showPassword, setShowPassword] = useState(false);
@@ -59,7 +60,7 @@ export const Register: React.FC<RegisterProps> = ({ onGoToLogin }) => {
     }
 
     setIsLoading(true);
-    storage.register(name, handle, password, avatarUrl || undefined).then((result) => {
+    storage.register(name, handle, password, avatarUrl || undefined, email.trim() || undefined).then((result) => {
       setIsLoading(false);
 
       if (result.success && result.user) {
@@ -176,6 +177,31 @@ export const Register: React.FC<RegisterProps> = ({ onGoToLogin }) => {
                   className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
                 />
               </div>
+            </div>
+
+            {/* E-mail para Notificações */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                  E-mail para Notificações
+                </label>
+                <span className="text-[11px] text-blue-600 font-medium">Receber avisos</span>
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                  <Mail className="w-4 h-4" />
+                </div>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="seuemail@gmail.com"
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition"
+                />
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                Você receberá um e-mail do Gmail quando te mandarem mensagens.
+              </p>
             </div>
 
             {/* Criação da Senha */}
