@@ -14,6 +14,15 @@ import { requestNotificationPermission, initServiceWorker } from './utils/notifi
 
 type SidebarView = 'chats' | 'settings' | 'new-contact' | 'contacts';
 
+type RouteType =
+  | { type: 'home' }
+  | { type: 'login' }
+  | { type: 'register' }
+  | { type: 'contacts' }
+  | { type: 'settings' }
+  | { type: 'new-contact' }
+  | { type: 'chat'; handle: string };
+
 // Helper de navegação com pushState/replaceState
 function navigateToUrl(path: string, replace = false) {
   if (typeof window === 'undefined') return;
@@ -26,26 +35,40 @@ function navigateToUrl(path: string, replace = false) {
 }
 
 // Helper para ler e normalizar a rota atual do navegador
-function parseCurrentRoute(): { route: 'login' | 'register' | 'chat' | 'home'; handle?: string } {
-  if (typeof window === 'undefined') return { route: 'home' };
+function parseCurrentRoute(): RouteType {
+  if (typeof window === 'undefined') return { type: 'home' };
   const rawPath = window.location.pathname;
 
   if (rawPath === '/cadastrar-se') {
-    return { route: 'register' };
+    return { type: 'register' };
   }
   if (rawPath === '/login') {
-    return { route: 'login' };
+    return { type: 'login' };
+  }
+  if (rawPath === '/contatos' || rawPath === '/ver-contatos') {
+    return { type: 'contacts' };
+  }
+  if (rawPath === '/configuracoes') {
+    return { type: 'settings' };
+  }
+  if (rawPath === '/novo-contato') {
+    return { type: 'new-contact' };
   }
   if (rawPath.startsWith('/conversa/')) {
-    let rawHandle = decodeURIComponent(rawPath.replace(/^\/conversa\//, '').trim());
+    let rawHandle = rawPath.replace(/^\/conversa\//, '').trim();
+    try {
+      rawHandle = decodeURIComponent(rawHandle);
+    } catch {
+      // safe fallback
+    }
     if (rawHandle) {
       if (!rawHandle.startsWith('@')) {
         rawHandle = `@${rawHandle}`;
       }
-      return { route: 'chat', handle: rawHandle };
+      return { type: 'chat', handle: rawHandle };
     }
   }
-  return { route: 'home' };
+  return { type: 'home' };
 }
 
 export default function App() {
@@ -74,7 +97,7 @@ export default function App() {
     setChats(userChats);
   }, [currentUser]);
 
-  // Função para abrir conversa por @handle (usada no carregamento direto de URLs como /conversa/@pessoa)
+  // Função para abrir conversa por @handle (sem porcentagens ou codificações estranhas)
   const openChatByHandle = useCallback(async (targetHandle: string, userToUse?: User) => {
     const activeUser = userToUse || currentUser || storage.getCurrentUser();
     if (!activeUser) {
@@ -93,7 +116,8 @@ export default function App() {
     if (existing) {
       setSelectedChatId(existing.id);
       storage.markMessagesAsRead(existing.id, activeUser.id);
-      navigateToUrl(`/conversa/${encodeURIComponent(existing.contact.handle)}`);
+      const displayHandle = existing.contact.handle.startsWith('@') ? existing.contact.handle : `@${existing.contact.handle}`;
+      navigateToUrl(`/conversa/${displayHandle}`);
       return;
     }
 
@@ -111,7 +135,8 @@ export default function App() {
           updatedAt: new Date().toISOString(),
         };
         setSelectedChatId(chatId);
-        navigateToUrl(`/conversa/${encodeURIComponent(found.handle)}`);
+        const displayHandle = found.handle.startsWith('@') ? found.handle : `@${found.handle}`;
+        navigateToUrl(`/conversa/${displayHandle}`);
         refreshChats();
       }
     } catch (err) {
@@ -132,9 +157,15 @@ export default function App() {
       const userChats = storage.getUserChats(user.id);
       setChats(userChats);
 
-      if (initialRoute.route === 'chat' && initialRoute.handle) {
+      if (initialRoute.type === 'chat' && initialRoute.handle) {
         openChatByHandle(initialRoute.handle, user);
-      } else if (initialRoute.route === 'login' || initialRoute.route === 'register') {
+      } else if (initialRoute.type === 'contacts') {
+        setSidebarView('contacts');
+      } else if (initialRoute.type === 'settings') {
+        setSidebarView('settings');
+      } else if (initialRoute.type === 'new-contact') {
+        setSidebarView('new-contact');
+      } else if (initialRoute.type === 'login' || initialRoute.type === 'register') {
         navigateToUrl('/', true);
       }
     };
@@ -144,9 +175,9 @@ export default function App() {
       applyUser(user);
     } else {
       // Se não há usuário na memória imediata, tenta restaurar sessão salva
-      if (initialRoute.route === 'register') {
+      if (initialRoute.type === 'register') {
         setAuthView('register');
-      } else if (initialRoute.route === 'chat' && initialRoute.handle) {
+      } else if (initialRoute.type === 'chat' && initialRoute.handle) {
         pendingChatHandleRef.current = initialRoute.handle;
         setAuthView('login');
       } else {
@@ -183,16 +214,26 @@ export default function App() {
     const handlePopState = () => {
       const current = parseCurrentRoute();
       if (!currentUser) {
-        if (current.route === 'register') {
+        if (current.type === 'register') {
           setAuthView('register');
         } else {
           setAuthView('login');
         }
       } else {
-        if (current.route === 'chat' && current.handle) {
+        if (current.type === 'chat' && current.handle) {
           openChatByHandle(current.handle);
-        } else if (current.route === 'home') {
+        } else if (current.type === 'contacts') {
           setSelectedChatId(null);
+          setSidebarView('contacts');
+        } else if (current.type === 'settings') {
+          setSelectedChatId(null);
+          setSidebarView('settings');
+        } else if (current.type === 'new-contact') {
+          setSelectedChatId(null);
+          setSidebarView('new-contact');
+        } else if (current.type === 'home') {
+          setSelectedChatId(null);
+          setSidebarView('chats');
         }
       }
     };
@@ -207,8 +248,10 @@ export default function App() {
     setCurrentUser(user);
     const userChats = storage.getUserChats(user.id);
     setChats(userChats);
+    setSidebarView('chats');
+    setSelectedChatId(null);
 
-    // Se havia uma conversa pendente na URL (ex: /conversa/@lucas), abre ela diretamente
+    // Se havia uma conversa pendente na URL (ex: acessou /conversa/@lucas antes do login), abre ela
     if (pendingChatHandleRef.current) {
       const handleToOpen = pendingChatHandleRef.current;
       pendingChatHandleRef.current = null;
@@ -216,16 +259,8 @@ export default function App() {
       return;
     }
 
-    // Caso contrário, atualiza a URL para a tela principal
+    // Autorizou a página -> vai diretamente para a página inicial (/)
     navigateToUrl('/');
-
-    // No desktop, seleciona a primeira conversa se existir
-    if (userChats.length > 0 && window.innerWidth >= 768) {
-      const firstChat = userChats[0];
-      setSelectedChatId(firstChat.id);
-      const handle = firstChat.contact.handle.startsWith('@') ? firstChat.contact.handle : `@${firstChat.contact.handle}`;
-      navigateToUrl(`/conversa/${encodeURIComponent(handle)}`);
-    }
   };
 
   const handleGoToRegister = () => {
@@ -250,12 +285,38 @@ export default function App() {
     navigateToUrl('/login');
   };
 
+  // Painéis do Menu e Navegação de URL
+  const handleOpenSettings = () => {
+    setSelectedChatId(null);
+    setSidebarView('settings');
+    navigateToUrl('/configuracoes');
+  };
+
+  const handleOpenContacts = () => {
+    setSelectedChatId(null);
+    setSidebarView('contacts');
+    navigateToUrl('/contatos');
+  };
+
+  const handleOpenNewContact = () => {
+    setSelectedChatId(null);
+    setSidebarView('new-contact');
+    navigateToUrl('/novo-contato');
+  };
+
+  const handleBackToChats = () => {
+    setSidebarView('chats');
+    setSelectedChatId(null);
+    navigateToUrl('/');
+  };
+
   // Chat Handlers
   const handleSelectChat = (chat: Chat) => {
     setSelectedChatId(chat.id);
     storage.markMessagesAsRead(chat.id, currentUser!.id);
     const cleanHandle = chat.contact.handle.startsWith('@') ? chat.contact.handle : `@${chat.contact.handle}`;
-    navigateToUrl(`/conversa/${encodeURIComponent(cleanHandle)}`);
+    // Limpo na barra de endereços: /conversa/@pessoa (sem %40)
+    navigateToUrl(`/conversa/${cleanHandle}`);
     refreshChats();
   };
 
@@ -314,9 +375,9 @@ export default function App() {
               chats={chats}
               selectedChatId={selectedChatId}
               onSelectChat={handleSelectChat}
-              onOpenAddContact={() => setSidebarView('new-contact')}
-              onOpenContactsList={() => setSidebarView('contacts')}
-              onOpenSettings={() => setSidebarView('settings')}
+              onOpenAddContact={handleOpenNewContact}
+              onOpenContactsList={handleOpenContacts}
+              onOpenSettings={handleOpenSettings}
               onLogout={handleLogout}
               isContinuousSyncing={true}
             />
@@ -325,16 +386,16 @@ export default function App() {
           {sidebarView === 'contacts' && (
             <ContactsListPanel
               currentUser={currentUser}
-              onBack={() => setSidebarView('chats')}
+              onBack={handleBackToChats}
               onSelectContact={handleSelectContactFromList}
-              onOpenAddContact={() => setSidebarView('new-contact')}
+              onOpenAddContact={handleOpenNewContact}
             />
           )}
 
           {sidebarView === 'new-contact' && (
             <NewContactPanel
               currentUser={currentUser}
-              onBack={() => setSidebarView('chats')}
+              onBack={handleBackToChats}
               onContactAdded={handleContactAdded}
             />
           )}
@@ -342,7 +403,7 @@ export default function App() {
           {sidebarView === 'settings' && (
             <SettingsPanel
               currentUser={currentUser}
-              onBack={() => setSidebarView('chats')}
+              onBack={handleBackToChats}
               onUpdateUser={(updated) => setCurrentUser(updated)}
               onLogout={handleLogout}
             />
@@ -367,7 +428,7 @@ export default function App() {
               onOpenContactInfo={(contact) => setInspectingContact(contact)}
             />
           ) : (
-            /* Desktop Empty State */
+            /* Desktop Empty State (Página Inicial) */
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-slate-50/70 select-none">
               <div className="max-w-md space-y-4">
                 <div className="w-20 h-20 rounded-3xl bg-blue-600 text-white flex items-center justify-center mx-auto shadow-xl shadow-blue-500/20">
@@ -385,7 +446,7 @@ export default function App() {
                 <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
                   <button
                     type="button"
-                    onClick={() => setSidebarView('new-contact')}
+                    onClick={handleOpenNewContact}
                     className="w-full sm:w-auto px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-medium text-sm rounded-xl shadow-sm transition inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <UserPlus className="w-4 h-4" />
@@ -393,7 +454,7 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setSidebarView('contacts')}
+                    onClick={handleOpenContacts}
                     className="w-full sm:w-auto px-5 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 active:scale-95 text-slate-700 font-medium text-sm rounded-xl transition inline-flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Users className="w-4 h-4 text-blue-600" />
