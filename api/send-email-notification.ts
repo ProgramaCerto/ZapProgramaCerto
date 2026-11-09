@@ -36,60 +36,48 @@ export default async function handler(req: Request, res: Response) {
     const appName = 'ZapProgramaCerto';
     const displaySender = senderName || senderHandle || 'Um contato';
     const formattedTime = sentAt || new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-    const targetUrl = 'https://zap-programacerto.vercel.app';
+    const targetUrl = chatUrl || 'https://zap-programacerto.vercel.app';
 
-    let contentPreview = messageText || '';
-    if (messageType === 'image') {
-      contentPreview = '📷 [Foto enviada]';
-    } else if (messageType === 'audio') {
-      contentPreview = '🎤 [Mensagem de áudio]';
-    }
-
+    const subject = `💬 ${displaySender} está te chamando para uma conversa no ${appName}`;
     const htmlBody = `
       <!DOCTYPE html>
       <html lang="pt-BR">
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nova mensagem de ${displaySender}</title>
+        <title>${displaySender} está te chamando</title>
       </head>
       <body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
-        <div style="max-width: 560px; margin: 30px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0;">
+        <div style="max-width: 540px; margin: 30px auto; background-color: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08); border: 1px solid #e2e8f0;">
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #2563eb, #1d4ed8); padding: 28px 24px; text-align: center;">
             <div style="display: inline-block; background-color: #ffffff; border-radius: 14px; padding: 10px; margin-bottom: 10px;">
               <span style="font-size: 26px;">💬</span>
             </div>
             <h1 style="margin: 0; color: #ffffff; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">${appName}</h1>
-            <p style="margin: 6px 0 0 0; color: #bfdbfe; font-size: 13px;">Nova mensagem recebida</p>
+            <p style="margin: 6px 0 0 0; color: #bfdbfe; font-size: 13px;">Chamada para conversa</p>
           </div>
 
           <!-- Body Content -->
-          <div style="padding: 32px 28px;">
-            <p style="margin: 0 0 18px 0; font-size: 15px; line-height: 1.5; color: #334155;">
-              Olá${recipientName ? `, <strong>${recipientName}</strong>` : ''}! O seu contato <strong style="color: #0f172a; font-size: 16px;">${displaySender}</strong> (${senderHandle || ''}) te mandou a seguinte mensagem no <strong>${appName}</strong>:
+          <div style="padding: 32px 28px; text-align: center;">
+            <p style="margin: 0 0 16px 0; font-size: 16px; line-height: 1.6; color: #334155;">
+              Olá! O seu contato <strong style="color: #0f172a; font-size: 17px;">${displaySender}</strong> (${senderHandle || ''}) está te chamando para uma conversa no <strong>${appName}</strong>.
             </p>
 
-            <!-- Message Card -->
-            <div style="background-color: #f8fafc; border-left: 4px solid #2563eb; border-radius: 0 12px 12px 0; padding: 18px 20px; margin-bottom: 24px;">
-              <p style="margin: 0; font-size: 16px; font-weight: 500; color: #0f172a; word-break: break-word;">
-                "${contentPreview}"
-              </p>
-              <p style="margin: 10px 0 0 0; font-size: 12px; color: #64748b;">
-                ⏰ Enviada às <strong>${formattedTime}</strong>
-              </p>
-            </div>
+            <p style="margin: 0 0 24px 0; font-size: 15px; color: #64748b;">
+              Clique no botão para você ter uma conversa:
+            </p>
 
             <!-- CTA Button -->
-            <div style="text-align: center; margin: 30px 0 20px 0;">
+            <div style="text-align: center; margin: 28px 0;">
               <a href="${targetUrl}"
-                 style="display: inline-block; background-color: #2563eb; color: #ffffff; font-size: 15px; font-weight: 600; text-decoration: none; padding: 14px 28px; border-radius: 12px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);">
-                📱 Abrir conversa no celular
+                 style="display: inline-block; background-color: #2563eb; color: #ffffff; font-size: 16px; font-weight: 700; text-decoration: none; padding: 15px 32px; border-radius: 14px; box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);">
+                📱 Abrir ZapProgramaCerto
               </a>
             </div>
 
-            <p style="margin: 24px 0 0 0; font-size: 12px; text-align: center; color: #94a3b8; line-height: 1.4;">
-              Esta notificação foi enviada automaticamente pelo ${appName} porque este e-mail foi cadastrado na sua conta.
+            <p style="margin: 20px 0 0 0; font-size: 12px; color: #94a3b8;">
+              ⏰ Chamada enviada às <strong>${formattedTime}</strong>
             </p>
           </div>
 
@@ -105,8 +93,8 @@ export default async function handler(req: Request, res: Response) {
     const info = await transporter.sendMail({
       from: `"${appName}" <${SMTP_USER}>`,
       to: toEmail,
-      subject: `💬 ${displaySender} te mandou uma mensagem no ${appName}`,
-      text: `${displaySender} te mandou a seguinte mensagem no ${appName}:\n\n"${contentPreview}"\n\nEnviada às ${formattedTime}\n\nAcesse: ${targetUrl}`,
+      subject: subject,
+      text: `Olá! Seu contato ${displaySender} (${senderHandle || ''}) está te chamando para uma conversa no ${appName}. Clique no link para você ter uma conversa:\n\n${targetUrl}\n\nEnviada às ${formattedTime}`,
       html: htmlBody,
     });
 

@@ -80,9 +80,9 @@ export const NewContactPanel: React.FC<NewContactPanelProps> = ({
 
       {/* Form content */}
       <div className="p-5 flex-1 overflow-y-auto space-y-5">
-        <p className="text-xs text-slate-500">
-          Informe o nome e o usuário da pessoa para iniciar uma conversa direta.
-        </p>
+        <div className="p-3 bg-blue-50/80 border border-blue-100 rounded-xl text-xs text-blue-900 leading-relaxed">
+          🔒 <strong>Privacidade entre contatos:</strong> Por segurança, nenhum contato ou usuário é exibido em listas públicas. Para iniciar uma conversa, digite o nome e o arroba (@) exato da pessoa.
+        </div>
 
         {error && (
           <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-start gap-2.5">

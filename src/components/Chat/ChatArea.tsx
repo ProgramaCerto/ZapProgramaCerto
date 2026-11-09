@@ -13,6 +13,8 @@ import {
   Loader2,
   AlertTriangle,
   Download,
+  Mail,
+  MessageSquare,
 } from 'lucide-react';
 import { Chat, Message, User as UserType } from '../../types/chat';
 import { storage } from '../../services/storage';
@@ -52,6 +54,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
     chat.contact.name && chat.contact.name !== chat.contact.handle ? chat.contact.name : ''
   );
   const [isSaving, setIsSaving] = useState(false);
+  // Email and Call to Chat states
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailFeedback, setEmailFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const messagesContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -163,6 +168,57 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       }, 50);
     } finally {
       setIsSendingText(false);
+    }
+  };
+
+  // Chamar para a conversa (envia mensagem imediata)
+  const handleCallToChat = async () => {
+    if (isSendingText) return;
+    setIsSendingText(true);
+    try {
+      await storage.sendMessage({
+        chatId: chat.id,
+        senderId: currentUser.id,
+        senderHandle: currentUser.handle,
+        recipientId: chat.contact.id,
+        type: 'text',
+        text: '👋 Olá! Estou te chamando para conversar aqui no ZapProgramaCerto.',
+      });
+      setTimeout(() => {
+        scrollToBottom(true);
+      }, 50);
+    } finally {
+      setIsSendingText(false);
+    }
+  };
+
+  // Envia e-mail notificando o contato com link direto para conversa via Gmail SMTP
+  const handleSendEmailInvite = async () => {
+    if (isSendingEmail) return;
+    setIsSendingEmail(true);
+    setEmailFeedback(null);
+    try {
+      const res = await storage.sendEmailCallInvite({
+        senderId: currentUser.id,
+        senderHandle: currentUser.handle,
+        recipientId: chat.contact.id,
+      });
+
+      setEmailFeedback({
+        type: res.success ? 'success' : 'error',
+        message: res.message,
+      });
+
+      setTimeout(() => {
+        setEmailFeedback(null);
+      }, 7000);
+    } catch {
+      setEmailFeedback({
+        type: 'error',
+        message: 'Falha ao conectar com o serviço de e-mail.',
+      });
+    } finally {
+      setIsSendingEmail(false);
     }
   };
 
@@ -312,8 +368,23 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           </div>
         </div>
 
-        {/* Action icons - Apagar conversa */}
+        {/* Action icons - Enviar e-mail & Apagar conversa */}
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={handleSendEmailInvite}
+            disabled={isSendingEmail}
+            title="Enviar e-mail chamando para a conversa"
+            aria-label="Enviar e-mail chamando para a conversa"
+            className="p-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50 active:scale-95 rounded-xl transition cursor-pointer flex items-center justify-center disabled:opacity-50"
+          >
+            {isSendingEmail ? (
+              <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+            ) : (
+              <Mail className="w-4 h-4" />
+            )}
+          </button>
+
           <button
             type="button"
             onClick={() => setIsDeleteChatConfirmOpen(true)}
@@ -351,10 +422,79 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         ref={messagesContainerRef}
         className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-3.5"
       >
-        {/* Intro banner */}
-        <div className="text-center my-4">
-          <div className="inline-block bg-white/90 border border-slate-200/80 px-3.5 py-1.5 rounded-full text-xs text-slate-500 shadow-xs">
-            Conversa com <strong className="text-slate-700">{chat.contact.name}</strong> ({chat.contact.handle})
+        {/* Contact Profile & Action Card: Foto, Nome, Arroba, Chamar para a conversa e Enviar e-mail */}
+        <div className="flex flex-col items-center justify-center my-4 px-2">
+          <div className="w-full max-w-sm bg-white/95 backdrop-blur-sm border border-slate-200/90 rounded-2xl p-4 shadow-xs text-center transition-all">
+            {/* Foto */}
+            <div className="relative inline-block mb-2.5">
+              {chat.contact.avatar ? (
+                <img
+                  src={chat.contact.avatar}
+                  alt={chat.contact.name}
+                  className="w-16 h-16 rounded-full object-cover border-2 border-blue-500 shadow-xs mx-auto"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-full bg-blue-50 border-2 border-blue-400 flex items-center justify-center text-blue-500 mx-auto">
+                  <User className="w-8 h-8" />
+                </div>
+              )}
+            </div>
+
+            {/* Nome e Arroba */}
+            <h3 className="text-base font-bold text-slate-900 leading-tight">
+              {chat.contact.name}
+            </h3>
+            <p className="text-xs font-semibold text-blue-600 mt-0.5">
+              {chat.contact.handle}
+            </p>
+
+            {/* Feedback alert ao enviar e-mail */}
+            {emailFeedback && (
+              <div
+                className={`mt-3 p-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all ${
+                  emailFeedback.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}
+              >
+                <span>{emailFeedback.message}</span>
+              </div>
+            )}
+
+            {/* Botões: Chamar para a conversa & Enviar e-mail */}
+            <div className="mt-3.5 pt-3 border-t border-slate-100 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={handleCallToChat}
+                disabled={isSendingText}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-50 hover:bg-blue-100 active:scale-95 text-blue-700 font-semibold text-xs rounded-xl border border-blue-200/80 transition cursor-pointer disabled:opacity-50"
+                title="Chamar para a conversa"
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0 text-blue-600" />
+                <span className="truncate">Chamar</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleSendEmailInvite}
+                disabled={isSendingEmail}
+                className="flex items-center justify-center gap-1.5 px-3 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-95 text-white font-semibold text-xs rounded-xl shadow-xs transition cursor-pointer disabled:opacity-60"
+                title="Enviar e-mail chamando para a conversa"
+              >
+                {isSendingEmail ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Enviando...</span>
+                  </>
+                ) : (
+                  <>
+                    <Mail className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">Enviar e-mail</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
 

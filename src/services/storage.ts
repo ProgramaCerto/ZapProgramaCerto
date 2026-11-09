@@ -1193,42 +1193,26 @@ class StorageService {
       }, 400);
     }
 
-    // Dispara notificação por e-mail via Gmail SMTP em segundo plano para o destinatário
-    if (resolvedRecipientId) {
-      this.sendEmailNotificationForMessage({
-        senderId: params.senderId,
-        senderHandle: params.senderHandle,
-        recipientId: resolvedRecipientId,
-        text: params.text,
-        type: params.type,
-      }).catch((e) => {
-        console.warn('Erro ao disparar notificação por e-mail:', e);
-      });
-    }
-
     return newMessage;
   }
 
   /**
-   * Envia notificação por e-mail para o destinatário usando o Gmail SMTP
-   * Inclui o nome com o qual o remetente está salvo no celular do destinatário
+   * Envia e-mail chamando o contato para uma conversa via Gmail SMTP
+   * Informa quem está chamando (nome salvo na agenda do destinatário) e link direto da conversa
    */
-  private async sendEmailNotificationForMessage(params: {
+  public async sendEmailCallInvite(params: {
     senderId: string;
     senderHandle: string;
     recipientId: string;
-    text?: string;
-    type: 'text' | 'image' | 'audio';
-  }) {
+  }): Promise<{ success: boolean; message: string }> {
     try {
       const client = getSupabaseClient();
-      if (!client) return;
 
       // 1. Obter dados do destinatário (incluindo seu e-mail cadastrado)
       let recipient = this.memoryUsers.find((u) => u.id === params.recipientId);
       let recipientEmail = recipient?.email;
 
-      if (!recipientEmail) {
+      if (!recipientEmail && client) {
         const { data: recRow } = await client
           .from('usuarios')
           .select('*')
@@ -1248,21 +1232,25 @@ class StorageService {
       }
 
       if (!recipientEmail || !recipientEmail.includes('@')) {
-        // Destinatário não possui e-mail cadastrado para notificações
-        return;
+        return {
+          success: false,
+          message: 'Este contato ainda não possui um e-mail cadastrado na conta dele para receber notificações.',
+        };
       }
 
       // 2. Verificar como o remetente está salvo no celular/contatos do destinatário
       let senderSavedName = '';
-      const { data: contactRow } = await client
-        .from('contatos')
-        .select('nome_salvo')
-        .eq('usuario_id', params.recipientId)
-        .eq('contato_id', params.senderId)
-        .maybeSingle();
+      if (client) {
+        const { data: contactRow } = await client
+          .from('contatos')
+          .select('nome_salvo')
+          .eq('usuario_id', params.recipientId)
+          .eq('contato_id', params.senderId)
+          .maybeSingle();
 
-      if (contactRow?.nome_salvo && contactRow.nome_salvo.trim()) {
-        senderSavedName = contactRow.nome_salvo.trim();
+        if (contactRow?.nome_salvo && contactRow.nome_salvo.trim()) {
+          senderSavedName = contactRow.nome_salvo.trim();
+        }
       }
 
       if (!senderSavedName) {
@@ -1270,26 +1258,44 @@ class StorageService {
         senderSavedName = senderUser?.name || params.senderHandle || 'Seu contato';
       }
 
-      const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      const currentOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://zap-programacerto.vercel.app';
+      const cleanSenderHandle = params.senderHandle.startsWith('@') ? params.senderHandle : `@${params.senderHandle}`;
+      const chatDirectUrl = `${currentOrigin}/conversa/${cleanSenderHandle}`;
       const formattedTime = new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
 
       // 3. Dispara POST para o endpoint do servidor local (/api/send-email-notification)
-      await fetch('/api/send-email-notification', {
+      const res = await fetch('/api/send-email-notification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           toEmail: recipientEmail,
           senderName: senderSavedName,
-          senderHandle: params.senderHandle,
+          senderHandle: cleanSenderHandle,
           recipientName: recipient?.name || '',
-          messageText: params.text || '',
-          messageType: params.type,
+          isCallInvite: true,
           sentAt: formattedTime,
-          chatUrl: 'https://zap-programacerto.vercel.app',
+          chatUrl: chatDirectUrl,
         }),
       });
-    } catch (err) {
-      console.warn('Erro ao processar notificação por e-mail:', err);
+
+      const data = await res.json();
+      if (data.success) {
+        return {
+          success: true,
+          message: `E-mail de chamada enviado com sucesso para ${recipient?.name || senderSavedName}!`,
+        };
+      } else {
+        return {
+          success: false,
+          message: `Erro ao enviar e-mail: ${data.error || 'Falha no servidor SMTP'}`,
+        };
+      }
+    } catch (err: any) {
+      console.warn('Erro ao processar chamada por e-mail:', err);
+      return {
+        success: false,
+        message: 'Não foi possível conectar ao serviço de e-mail.',
+      };
     }
   }
 
